@@ -3,8 +3,8 @@ package com.acespade.security;
 import com.acespade.model.PlayerSession;
 import com.acespade.repository.SessionRepository;
 import com.acespade.service.RoomService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.stomp.StompCommand;
@@ -23,11 +23,15 @@ import java.util.Optional;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class AuthChannelInterceptor implements ChannelInterceptor {
 
     private final SessionRepository sessionRepository;
     private final RoomService roomService;
+
+    public AuthChannelInterceptor(SessionRepository sessionRepository, @Lazy RoomService roomService) {
+        this.sessionRepository = sessionRepository;
+        this.roomService = roomService;
+    }
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
