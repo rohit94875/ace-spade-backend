@@ -26,12 +26,24 @@ public class DisconnectScheduler {
     });
 
     private final ConcurrentHashMap<String, ScheduledFuture<?>> pending = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> graceExpiresAt = new ConcurrentHashMap<>();
+
+    public long getGraceSeconds() {
+        return GRACE_SECONDS;
+    }
+
+    public Long getGraceExpiresAt(String roomCode, String playerId) {
+        return graceExpiresAt.get(key(roomCode, playerId));
+    }
 
     public void scheduleDeparture(String roomCode, String playerId, Runnable onExpire) {
         String key = key(roomCode, playerId);
         cancel(roomCode, playerId);
+        long expires = System.currentTimeMillis() + GRACE_SECONDS * 1000L;
+        graceExpiresAt.put(key, expires);
         ScheduledFuture<?> future = executor.schedule(() -> {
             pending.remove(key);
+            graceExpiresAt.remove(key);
             try {
                 onExpire.run();
             } catch (Exception e) {
@@ -45,6 +57,7 @@ public class DisconnectScheduler {
     public void cancel(String roomCode, String playerId) {
         String key = key(roomCode, playerId);
         ScheduledFuture<?> future = pending.remove(key);
+        graceExpiresAt.remove(key);
         if (future != null) {
             future.cancel(false);
             log.debug("Cancelled disconnect grace for player {} in {}", playerId, roomCode);

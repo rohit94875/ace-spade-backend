@@ -9,17 +9,15 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class PlayerDto {
-    private String id;
+public class PlayerPresenceDto {
+    private String playerId;
     private String username;
-    private Integer bid;
-    private int tricksWon;
-    private int cardCount;
-    private boolean currentTurn;
-    private boolean host;
-    private boolean bot;
     private boolean connected;
+    private boolean bot;
+    /** Epoch millis; null when not in disconnect grace. */
     private Long graceExpiresAt;
+    /** Epoch millis of last connect/disconnect activity. */
     private long lastSeenAt;
-    private String presenceStatus;
+    /** ONLINE | DISCONNECTED | GRACE | PAUSED */
+    private String status;
 }

@@ -2,7 +2,7 @@ package com.acespade.security;
 
 import com.acespade.model.PlayerSession;
 import com.acespade.repository.SessionRepository;
-import com.acespade.service.DisconnectScheduler;
+import com.acespade.service.RoomService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.Message;
@@ -27,7 +27,7 @@ import java.util.Optional;
 public class AuthChannelInterceptor implements ChannelInterceptor {
 
     private final SessionRepository sessionRepository;
-    private final DisconnectScheduler disconnectScheduler;
+    private final RoomService roomService;
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
@@ -49,7 +49,7 @@ public class AuthChannelInterceptor implements ChannelInterceptor {
                             return playerId;
                         }
                     });
-                    disconnectScheduler.cancel(roomCode, playerId);
+                    roomService.onWebSocketConnect(roomCode, playerId);
                     log.debug("WebSocket CONNECT authenticated for player {}", playerId);
                 } else {
                     log.warn("WebSocket CONNECT with invalid token");

@@ -1,6 +1,7 @@
 package com.acespade.controller;
 
 import com.acespade.dto.BidRequest;
+import com.acespade.dto.ChatRequest;
 import com.acespade.dto.PlayCardRequest;
 import com.acespade.service.RoomService;
 import lombok.RequiredArgsConstructor;
@@ -87,5 +88,13 @@ public class GameController {
         if (principal == null) return;
         log.debug("RESUME received for room {} by {}", roomCode, principal.getName());
         roomService.resumeGame(roomCode, principal.getName());
+    }
+
+    @MessageMapping("/game/{roomCode}/chat")
+    public void sendChat(@DestinationVariable String roomCode,
+                         @Payload ChatRequest request,
+                         Principal principal) {
+        if (principal == null || request == null) return;
+        roomService.sendChatMessage(roomCode, principal.getName(), request.getText());
     }
 }

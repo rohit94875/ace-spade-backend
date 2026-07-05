@@ -27,8 +27,18 @@ public class Player implements Serializable {
 
     private int tricksWon;
 
-  /** True for BOT Vitality (solo or takeover). */
+    /** True for BOT Vitality (solo or takeover). */
     private boolean bot;
+
+    /** WebSocket connected right now. */
+    @Builder.Default
+    private boolean connected = false;
+
+    /** Epoch millis of last presence change. */
+    private long lastSeenAt;
+
+    /** When disconnect grace expires; null if not in grace. */
+    private Long graceExpiresAt;
 
     public void resetForRound() {
         this.hand = new ArrayList<>();

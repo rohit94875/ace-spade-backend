@@ -60,6 +60,8 @@ public class RoomService {
                 .username(username)
                 .hand(new ArrayList<>())
                 .bot(false)
+                .connected(false)
+                .lastSeenAt(System.currentTimeMillis())
                 .build();
 
         GameState state = GameState.builder()
@@ -130,6 +132,8 @@ public class RoomService {
                     .username(username)
                     .hand(new ArrayList<>())
                     .bot(false)
+                    .connected(false)
+                    .lastSeenAt(System.currentTimeMillis())
                     .build();
             state.getPlayers().add(player);
             state.getScores().put(playerId, 0);
@@ -162,6 +166,104 @@ public class RoomService {
         GameState state = gameStateRepository.findByRoomCode(roomCode)
                 .orElseThrow(() -> new IllegalArgumentException("Room not found: " + roomCode));
         return toRoomStateDto(state, null);
+    }
+
+    public SessionResumeResponse resumeSession(String token) {
+        return sessionRepository.findByToken(token)
+                .map(session -> {
+                    GameState state = gameStateRepository.findByRoomCode(session.getRoomCode()).orElse(null);
+                    if (state == null) {
+                        return SessionResumeResponse.builder()
+                                .valid(false)
+                                .message("Room no longer exists")
+                                .build();
+                    }
+                    Player player = state.findPlayer(session.getPlayerId());
+                    if (player == null || player.isBot()) {
+                        return SessionResumeResponse.builder()
+                                .valid(false)
+                                .message("You are no longer in this room")
+                                .build();
+                    }
+                    syncPresenceFromScheduler(state);
+                    return buildSessionResumeResponse(state, session, player);
+                })
+                .orElse(SessionResumeResponse.builder()
+                        .valid(false)
+                        .message("Session expired — join again with room code")
+                        .build());
+    }
+
+    public void onWebSocketConnect(String roomCode, String playerId) {
+        disconnectScheduler.cancel(roomCode, playerId);
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = gameStateRepository.findByRoomCode(roomCode).orElse(null);
+            if (state == null) {
+                return;
+            }
+            Player player = state.findPlayer(playerId);
+            if (player == null || player.isBot()) {
+                return;
+            }
+            player.setConnected(true);
+            player.setLastSeenAt(System.currentTimeMillis());
+            player.setGraceExpiresAt(null);
+            gameStateRepository.save(state);
+            broadcastPresenceUpdate(state);
+            sendGameSnapshotToPlayer(state, playerId);
+            log.info("Player {} reconnected to room {}", player.getUsername(), roomCode);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public void sendChatMessage(String roomCode, String playerId, String text) {
+        if (text == null) {
+            return;
+        }
+        String trimmed = text.trim();
+        if (trimmed.isEmpty() || trimmed.length() > 300) {
+            sendError(playerId, "Message must be 1–300 characters");
+            return;
+        }
+
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = getStateOrThrow(roomCode);
+            if (state.getPhase() == GamePhase.GAME_END) {
+                sendError(playerId, "Game has ended");
+                return;
+            }
+            Player player = state.findPlayer(playerId);
+            if (player == null || player.isBot()) {
+                sendError(playerId, "Cannot send chat");
+                return;
+            }
+
+            ChatMessage msg = ChatMessage.builder()
+                    .id(UUID.randomUUID().toString())
+                    .playerId(playerId)
+                    .username(player.getUsername())
+                    .text(trimmed)
+                    .sentAt(System.currentTimeMillis())
+                    .build();
+            if (state.getChatMessages() == null) {
+                state.setChatMessages(new ArrayList<>());
+            }
+            state.getChatMessages().add(msg);
+            while (state.getChatMessages().size() > 100) {
+                state.getChatMessages().remove(0);
+            }
+            gameStateRepository.save(state);
+
+            ChatMessageDto dto = toChatDto(msg);
+            broadcast(roomCode, GameEvent.of(GameEvent.EventType.CHAT_MESSAGE, dto));
+        } finally {
+            lock.unlock();
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -208,19 +310,36 @@ public class RoomService {
         lock.lock();
         try {
             GameState state = gameStateRepository.findByRoomCode(roomCode).orElse(null);
-            if (state != null && isSoloBotGame(state) && isInProgressPhase(state)) {
-                pauseGameInternal(state, playerId, true);
+            if (state == null) {
                 return;
             }
+            Player player = state.findPlayer(playerId);
+            if (player == null || player.isBot()) {
+                return;
+            }
+            player.setConnected(false);
+            player.setLastSeenAt(System.currentTimeMillis());
+
+            if (isSoloBotGame(state) && isInProgressPhase(state)) {
+                pauseGameInternal(state, playerId, true);
+                player.setGraceExpiresAt(null);
+                gameStateRepository.save(state);
+                broadcastPresenceUpdate(state);
+                return;
+            }
+
+            disconnectScheduler.scheduleDeparture(roomCode, playerId,
+                    () -> handlePlayerDeparture(roomCode, playerId, false));
+            player.setGraceExpiresAt(disconnectScheduler.getGraceExpiresAt(roomCode, playerId));
+            gameStateRepository.save(state);
+            broadcastPresenceUpdate(state);
         } finally {
             lock.unlock();
         }
-        disconnectScheduler.scheduleDeparture(roomCode, playerId,
-                () -> handlePlayerDeparture(roomCode, playerId, false));
     }
 
     public void onWebSocketReconnect(String roomCode, String playerId) {
-        disconnectScheduler.cancel(roomCode, playerId);
+        onWebSocketConnect(roomCode, playerId);
     }
 
     public void pauseGame(String roomCode, String playerId) {
@@ -261,6 +380,7 @@ public class RoomService {
             payload.put("resumedByPlayerId", playerId);
             payload.put("resumedByUsername", player.getUsername());
             broadcast(roomCode, GameEvent.of(GameEvent.EventType.GAME_RESUMED, payload));
+            broadcastPresenceUpdate(state);
             runBots = true;
             log.info("Game resumed in room {} by {}", roomCode, player.getUsername());
         } finally {
@@ -297,6 +417,7 @@ public class RoomService {
 
         state.setPaused(true);
         state.setPausedByPlayerId(playerId);
+        player.setGraceExpiresAt(null);
         gameStateRepository.save(state);
 
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -304,6 +425,7 @@ public class RoomService {
         payload.put("pausedByUsername", player.getUsername());
         payload.put("auto", auto);
         broadcast(state.getRoomCode(), GameEvent.of(GameEvent.EventType.GAME_PAUSED, payload));
+        broadcastPresenceUpdate(state);
         log.info("Game paused in room {} by {} (auto={})", state.getRoomCode(), player.getUsername(), auto);
     }
 
@@ -740,6 +862,7 @@ public class RoomService {
     }
 
     private RoomStateDto toRoomStateDto(GameState state, String currentPlayerId) {
+        syncPresenceFromScheduler(state);
         String currentTurnId = state.getPlayers().isEmpty() ? null
                 : state.getPlayers().get(state.getCurrentPlayerIndex() % state.getPlayers().size()).getId();
         return RoomStateDto.builder()
@@ -754,6 +877,124 @@ public class RoomService {
                 .disconnectPolicy(state.getDisconnectPolicy())
                 .paused(state.isPaused())
                 .pausedByPlayerId(state.getPausedByPlayerId())
+                .chatMessages(toChatDtoList(state.getChatMessages()))
+                .presence(toPresenceMap(state))
+                .build();
+    }
+
+    private SessionResumeResponse buildSessionResumeResponse(GameState state, PlayerSession session, Player player) {
+        RoomStateDto room = toRoomStateDto(state, session.getPlayerId());
+        List<Card> hand = player.getHand() == null ? Collections.emptyList() : new ArrayList<>(player.getHand());
+        List<TrickCard> trick = state.getCurrentTrick() == null
+                ? Collections.emptyList() : new ArrayList<>(state.getCurrentTrick());
+        return SessionResumeResponse.builder()
+                .valid(true)
+                .playerId(session.getPlayerId())
+                .username(session.getUsername())
+                .host(session.isHost())
+                .roomCode(session.getRoomCode())
+                .room(room)
+                .hand(hand)
+                .currentTrick(trick)
+                .chatMessages(toChatDtoList(state.getChatMessages()))
+                .presence(toPresenceMap(state))
+                .build();
+    }
+
+    private void sendGameSnapshotToPlayer(GameState state, String playerId) {
+        Player player = state.findPlayer(playerId);
+        if (player == null) {
+            return;
+        }
+        PlayerSession session = PlayerSession.builder()
+                .playerId(playerId)
+                .roomCode(state.getRoomCode())
+                .username(player.getUsername())
+                .host(playerId.equals(state.getHostPlayerId()))
+                .build();
+        SessionResumeResponse snapshot = buildSessionResumeResponse(state, session, player);
+        messagingTemplate.convertAndSendToUser(playerId, "/queue/snapshot", snapshot);
+    }
+
+    private void broadcastPresenceUpdate(GameState state) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("presence", toPresenceMap(state));
+        payload.put("graceSeconds", disconnectScheduler.getGraceSeconds());
+        broadcast(state.getRoomCode(), GameEvent.of(GameEvent.EventType.PRESENCE_UPDATED, payload));
+    }
+
+    private void syncPresenceFromScheduler(GameState state) {
+        if (state.getPlayers() == null) {
+            return;
+        }
+        for (Player p : state.getPlayers()) {
+            if (p.isBot()) {
+                p.setConnected(true);
+                continue;
+            }
+            if (!p.isConnected()) {
+                Long grace = disconnectScheduler.getGraceExpiresAt(state.getRoomCode(), p.getId());
+                p.setGraceExpiresAt(grace);
+            }
+        }
+    }
+
+    private Map<String, PlayerPresenceDto> toPresenceMap(GameState state) {
+        Map<String, PlayerPresenceDto> map = new LinkedHashMap<>();
+        long now = System.currentTimeMillis();
+        for (Player p : state.getPlayers()) {
+            if (p.isBot()) {
+                map.put(p.getId(), PlayerPresenceDto.builder()
+                        .playerId(p.getId())
+                        .username(p.getUsername())
+                        .connected(true)
+                        .bot(true)
+                        .lastSeenAt(p.getLastSeenAt())
+                        .status("ONLINE")
+                        .build());
+                continue;
+            }
+            String status = resolvePresenceStatus(state, p, now);
+            map.put(p.getId(), PlayerPresenceDto.builder()
+                    .playerId(p.getId())
+                    .username(p.getUsername())
+                    .connected(p.isConnected())
+                    .bot(false)
+                    .graceExpiresAt(p.getGraceExpiresAt())
+                    .lastSeenAt(p.getLastSeenAt())
+                    .status(status)
+                    .build());
+        }
+        return map;
+    }
+
+    private String resolvePresenceStatus(GameState state, Player p, long now) {
+        if (state.isPaused() && p.getId().equals(state.getPausedByPlayerId())) {
+            return "PAUSED";
+        }
+        if (p.isConnected()) {
+            return "ONLINE";
+        }
+        if (p.getGraceExpiresAt() != null && p.getGraceExpiresAt() > now) {
+            return "GRACE";
+        }
+        return "DISCONNECTED";
+    }
+
+    private List<ChatMessageDto> toChatDtoList(List<ChatMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return messages.stream().map(this::toChatDto).collect(Collectors.toList());
+    }
+
+    private ChatMessageDto toChatDto(ChatMessage msg) {
+        return ChatMessageDto.builder()
+                .id(msg.getId())
+                .playerId(msg.getPlayerId())
+                .username(msg.getUsername())
+                .text(msg.getText())
+                .sentAt(msg.getSentAt())
                 .build();
     }
 
@@ -766,6 +1007,7 @@ public class RoomService {
     }
 
     private List<PlayerDto> toPlayerDtoList(GameState state, String currentTurnId) {
+        long now = System.currentTimeMillis();
         return state.getPlayers().stream().map(p -> PlayerDto.builder()
                 .id(p.getId())
                 .username(p.getUsername())
@@ -775,6 +1017,10 @@ public class RoomService {
                 .currentTurn(p.getId().equals(currentTurnId))
                 .host(p.getId().equals(state.getHostPlayerId()))
                 .bot(p.isBot())
+                .connected(p.isBot() || p.isConnected())
+                .graceExpiresAt(p.getGraceExpiresAt())
+                .lastSeenAt(p.getLastSeenAt())
+                .presenceStatus(p.isBot() ? "ONLINE" : resolvePresenceStatus(state, p, now))
                 .build()
         ).collect(Collectors.toList());
     }
