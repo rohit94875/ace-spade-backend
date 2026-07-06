@@ -3,12 +3,15 @@ package com.acespade.controller;
 import com.acespade.dto.*;
 import com.acespade.model.GameRecord;
 import com.acespade.repository.GameRecordRepository;
+import com.acespade.security.AuthUser;
 import com.acespade.service.RoomService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import javax.validation.Valid;
+import java.util.Collections;
 import java.util.List;
 
 @RestController
@@ -20,18 +23,24 @@ public class RoomController {
     private final GameRecordRepository gameRecordRepository;
 
     @PostMapping
-    public ResponseEntity<CreateRoomResponse> createRoom(@Valid @RequestBody CreateRoomRequest request) {
+    public ResponseEntity<CreateRoomResponse> createRoom(@Valid @RequestBody CreateRoomRequest request,
+                                                         @AuthenticationPrincipal AuthUser user) {
+        Long userId = user != null ? user.getId() : null;
         return ResponseEntity.ok(roomService.createRoom(
                 request.getUsername(),
                 request.isPlayWithBot(),
-                request.getDisconnectPolicy()));
+                request.getDisconnectPolicy(),
+                request.isRanked(),
+                userId));
     }
 
     @PostMapping("/{code}/join")
     public ResponseEntity<?> joinRoom(@PathVariable String code,
-                                      @Valid @RequestBody JoinRoomRequest request) {
+                                      @Valid @RequestBody JoinRoomRequest request,
+                                      @AuthenticationPrincipal AuthUser user) {
         try {
-            return ResponseEntity.ok(roomService.joinRoom(code.toUpperCase(), request.getUsername()));
+            Long userId = user != null ? user.getId() : null;
+            return ResponseEntity.ok(roomService.joinRoom(code.toUpperCase(), request.getUsername(), userId));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         }

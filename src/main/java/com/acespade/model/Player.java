@@ -19,6 +19,9 @@ public class Player implements Serializable {
     private String id;
     private String username;
 
+    /** Linked account for ranked play; null for guests. */
+    private Long userId;
+
     @Builder.Default
     private List<Card> hand = new ArrayList<>();
 

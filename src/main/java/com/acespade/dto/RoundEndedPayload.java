@@ -28,4 +28,6 @@ public class RoundEndedPayload {
     /** True when game ended because a player left (FORFEIT_WIN policy). */
     private boolean forfeit;
     private String forfeitedUsername;
+    /** playerId -> rating change; only on ranked game over */
+    private Map<String, RatingDeltaDto> ratingUpdates;
 }

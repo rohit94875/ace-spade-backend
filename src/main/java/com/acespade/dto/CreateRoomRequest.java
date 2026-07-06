@@ -16,6 +16,9 @@ public class CreateRoomRequest {
     /** When true, BOT Vitality joins the lobby so the host can start solo. */
     private boolean playWithBot = false;
 
+    /** Ranked match — requires login; never combined with bots. */
+    private boolean ranked = false;
+
     @NotNull
     private DisconnectPolicy disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
 }

@@ -1,12 +1,15 @@
 package com.acespade.service;
 
 import com.acespade.dto.*;
+import com.acespade.domain.User;
 import com.acespade.model.*;
 import com.acespade.model.enums.DisconnectPolicy;
 import com.acespade.model.enums.GamePhase;
+import com.acespade.rating.TierUtil;
 import com.acespade.repository.GameRecordRepository;
 import com.acespade.repository.GameStateRepository;
 import com.acespade.repository.SessionRepository;
+import com.acespade.repository.UserRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +40,8 @@ public class RoomService {
     private final GameStateRepository gameStateRepository;
     private final SessionRepository sessionRepository;
     private final GameRecordRepository gameRecordRepository;
+    private final UserRepository userRepository;
+    private final RatingService ratingService;
     private final GameEngine gameEngine;
     private final BotService botService;
     private final DisconnectScheduler disconnectScheduler;
@@ -50,7 +55,18 @@ public class RoomService {
     // REST operations
     // -------------------------------------------------------------------------
 
-    public CreateRoomResponse createRoom(String username, boolean playWithBot, DisconnectPolicy disconnectPolicy) {
+    public CreateRoomResponse createRoom(String username, boolean playWithBot,
+                                         DisconnectPolicy disconnectPolicy, boolean ranked, Long userId) {
+        if (ranked) {
+            if (userId == null) {
+                throw new IllegalArgumentException("Login required for ranked games");
+            }
+            if (playWithBot) {
+                throw new IllegalArgumentException("Ranked games cannot include bots");
+            }
+        }
+
+        username = resolveUsername(username, userId);
         String roomCode = generateUniqueRoomCode();
         String playerId = UUID.randomUUID().toString();
         String token = UUID.randomUUID().toString();
@@ -58,6 +74,7 @@ public class RoomService {
         Player host = Player.builder()
                 .id(playerId)
                 .username(username)
+                .userId(userId)
                 .hand(new ArrayList<>())
                 .bot(false)
                 .connected(false)
@@ -72,6 +89,7 @@ public class RoomService {
                 .players(new ArrayList<>(Collections.singletonList(host)))
                 .scores(new HashMap<>())
                 .playWithBot(playWithBot)
+                .ranked(ranked)
                 .disconnectPolicy(disconnectPolicy != null ? disconnectPolicy : DisconnectPolicy.FORFEIT_WIN)
                 .build();
         state.getScores().put(playerId, 0);
@@ -90,10 +108,11 @@ public class RoomService {
                 .roomCode(roomCode)
                 .username(username)
                 .host(true)
+                .userId(userId)
                 .build();
         sessionRepository.save(session);
 
-        log.info("Room {} created by {}", roomCode, username);
+        log.info("Room {} created by {} (ranked={})", roomCode, username, ranked);
         return CreateRoomResponse.builder()
                 .roomCode(roomCode)
                 .playerId(playerId)
@@ -102,7 +121,7 @@ public class RoomService {
                 .build();
     }
 
-    public JoinRoomResponse joinRoom(String roomCode, String username) {
+    public JoinRoomResponse joinRoom(String roomCode, String username, Long userId) {
         ReentrantLock lock = getRoomLock(roomCode);
         lock.lock();
         try {
@@ -112,14 +131,19 @@ public class RoomService {
             if (state.getPhase() != GamePhase.LOBBY) {
                 throw new IllegalStateException("Game has already started");
             }
+            if (state.isRanked() && userId == null) {
+                throw new IllegalArgumentException("Login required to join ranked games");
+            }
             if (state.getPlayers().size() >= gameEngine.getMaxPlayers()) {
                 throw new IllegalStateException("Room is full (max 8 players)");
             }
             if (username.toLowerCase().startsWith("bot vitality")) {
                 throw new IllegalArgumentException("Username reserved for bots");
             }
+            username = resolveUsername(username, userId);
+            final String resolvedUsername = username;
             boolean nameTaken = state.getPlayers().stream()
-                    .anyMatch(p -> p.getUsername().equalsIgnoreCase(username));
+                    .anyMatch(p -> p.getUsername().equalsIgnoreCase(resolvedUsername));
             if (nameTaken) {
                 throw new IllegalArgumentException("Username already taken in this room");
             }
@@ -129,7 +153,8 @@ public class RoomService {
 
             Player player = Player.builder()
                     .id(playerId)
-                    .username(username)
+                    .username(resolvedUsername)
+                    .userId(userId)
                     .hand(new ArrayList<>())
                     .bot(false)
                     .connected(false)
@@ -143,19 +168,20 @@ public class RoomService {
                     .token(token)
                     .playerId(playerId)
                     .roomCode(roomCode)
-                    .username(username)
+                    .username(resolvedUsername)
                     .host(false)
+                    .userId(userId)
                     .build();
             sessionRepository.save(session);
 
             broadcastRoomUpdate(state);
 
-            log.info("Player {} joined room {}", username, roomCode);
+            log.info("Player {} joined room {}", resolvedUsername, roomCode);
             return JoinRoomResponse.builder()
                     .roomCode(roomCode)
                     .playerId(playerId)
                     .sessionToken(token)
-                    .username(username)
+                    .username(resolvedUsername)
                     .build();
         } finally {
             lock.unlock();
@@ -287,6 +313,15 @@ public class RoomService {
             if (state.getPlayers().size() < MIN_PLAYERS) {
                 sendError(playerId, "Need at least " + MIN_PLAYERS + " players to start");
                 return;
+            }
+            if (state.isRanked()) {
+                boolean allLoggedIn = state.getPlayers().stream()
+                        .filter(p -> !p.isBot())
+                        .allMatch(p -> p.getUserId() != null);
+                if (!allLoggedIn) {
+                    sendError(playerId, "All players must be logged in to start a ranked game");
+                    return;
+                }
             }
 
             state.setRound(1);
@@ -554,10 +589,10 @@ public class RoomService {
                 .winnerScore(state.getScores().getOrDefault(winner.getId(), 0))
                 .forfeit(true)
                 .forfeitedUsername(forfeiter.getUsername())
+                .ratingUpdates(saveGameRecord(state))
                 .build();
 
         broadcast(state.getRoomCode(), GameEvent.of(GameEvent.EventType.GAME_ENDED, payload));
-        saveGameRecord(state);
     }
 
     private void processBotTurns(String roomCode) {
@@ -700,7 +735,6 @@ public class RoomService {
                     broadcastRoundStarted(state);
                 } else if (state.getPhase() == GamePhase.GAME_END) {
                     broadcastRoundEnded(state, true);
-                    saveGameRecord(state);
                 } else {
                     // Let the trick-winner overlay linger for 1.5 s before the next trick.
                     sleep(1500);
@@ -783,6 +817,11 @@ public class RoomService {
         // so subtract 1 to report the round that just finished.
         int completedRound = gameOver ? state.getRound() : state.getRound() - 1;
 
+        Map<String, RatingDeltaDto> ratingUpdates = null;
+        if (gameOver) {
+            ratingUpdates = saveGameRecord(state);
+        }
+
         RoundEndedPayload payload = RoundEndedPayload.builder()
                 .round(completedRound)
                 .roundScores(roundScores)
@@ -792,6 +831,7 @@ public class RoomService {
                 .gameOver(gameOver)
                 .winnerUsername(gameOver ? gameEngine.getWinnerUsername(state) : null)
                 .winnerScore(gameOver ? gameEngine.getWinnerScore(state) : 0)
+                .ratingUpdates(ratingUpdates)
                 .build();
 
         broadcast(state.getRoomCode(), GameEvent.of(
@@ -812,7 +852,7 @@ public class RoomService {
     // Persistence
     // -------------------------------------------------------------------------
 
-    private void saveGameRecord(GameState state) {
+    private Map<String, RatingDeltaDto> saveGameRecord(GameState state) {
         try {
             Map<String, Integer> usernameScores = new LinkedHashMap<>();
             for (Player p : state.getPlayers()) {
@@ -827,13 +867,30 @@ public class RoomService {
                     .winnerUsername(gameEngine.getWinnerUsername(state))
                     .winnerScore(gameEngine.getWinnerScore(state))
                     .playedAt(LocalDateTime.now())
+                    .ranked(state.isRanked())
+                    .seasonId(TierUtil.CURRENT_SEASON_ID)
                     .build();
 
-            gameRecordRepository.save(record);
-            log.info("Game record saved for room {}", state.getRoomCode());
+            record = gameRecordRepository.save(record);
+            log.info("Game record saved for room {} (ranked={})", state.getRoomCode(), state.isRanked());
+
+            if (state.isRanked() && !state.isPlayWithBot()) {
+                return ratingService.processRankedGame(record, state.getPlayers(), state.getScores());
+            }
+            return null;
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize game record for room {}", state.getRoomCode(), e);
+            return null;
         }
+    }
+
+    private String resolveUsername(String requested, Long userId) {
+        if (userId == null) {
+            return requested.trim();
+        }
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("Account not found"));
+        return user.getUsername();
     }
 
     // -------------------------------------------------------------------------
@@ -874,6 +931,7 @@ public class RoomService {
                 .currentTurnPlayerId(currentTurnId)
                 .hostPlayerId(state.getHostPlayerId())
                 .playWithBot(state.isPlayWithBot())
+                .ranked(state.isRanked())
                 .disconnectPolicy(state.getDisconnectPolicy())
                 .paused(state.isPaused())
                 .pausedByPlayerId(state.getPausedByPlayerId())

@@ -64,6 +64,10 @@ public class GameState implements Serializable {
     @Builder.Default
     private boolean playWithBot = false;
 
+    /** Ranked match — login required, affects MMR (never with bots). */
+    @Builder.Default
+    private boolean ranked = false;
+
     /** Room option: what happens when a human leaves mid-game. */
     @Builder.Default
     private DisconnectPolicy disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
