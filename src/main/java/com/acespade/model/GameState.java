@@ -75,6 +75,10 @@ public class GameState implements Serializable {
     /** Player who paused (human); used for resume authorization. */
     private String pausedByPlayerId;
 
+    /** In-room chat (most recent last; capped on insert). */
+    @Builder.Default
+    private List<ChatMessage> chatMessages = new ArrayList<>();
+
     public Player findPlayer(String playerId) {
         return players.stream()
                 .filter(p -> p.getId().equals(playerId))

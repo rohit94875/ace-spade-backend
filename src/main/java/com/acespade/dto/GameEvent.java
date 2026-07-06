@@ -25,6 +25,9 @@ public class GameEvent {
         BOT_TAKEOVER,
         GAME_PAUSED,
         GAME_RESUMED,
+        GAME_SNAPSHOT,
+        PRESENCE_UPDATED,
+        CHAT_MESSAGE,
         ERROR
     }
 

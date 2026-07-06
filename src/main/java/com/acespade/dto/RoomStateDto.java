@@ -26,4 +26,6 @@ public class RoomStateDto {
     private DisconnectPolicy disconnectPolicy;
     private boolean paused;
     private String pausedByPlayerId;
+    private List<ChatMessageDto> chatMessages;
+    private Map<String, PlayerPresenceDto> presence;
 }
