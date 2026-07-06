@@ -20,7 +20,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class GameEngine {
 
-    private static final int MAX_ROUNDS = 13;
+    private static final int DEFAULT_MAX_ROUNDS = 13;
     private static final int MAX_PLAYERS = 8;
 
     private final TrickResolver trickResolver;
@@ -208,7 +208,7 @@ public class GameEngine {
 
         log.debug("Round {} ended. Scores: {}", state.getRound(), state.getScores());
 
-        if (state.getRound() == MAX_ROUNDS) {
+        if (state.getRound() == effectiveMaxRounds(state)) {
             state.setPhase(GamePhase.GAME_END);
         } else {
             state.setRound(state.getRound() + 1);
@@ -297,5 +297,10 @@ public class GameEngine {
 
     public int getMaxPlayers() {
         return MAX_PLAYERS;
+    }
+
+    private static int effectiveMaxRounds(GameState state) {
+        int max = state.getMaxRounds();
+        return max == 10 ? 10 : DEFAULT_MAX_ROUNDS;
     }
 }

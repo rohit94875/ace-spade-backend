@@ -18,6 +18,7 @@ public class RoomStateDto {
     private String roomCode;
     private GamePhase phase;
     private int round;
+    private int maxRounds;
     private List<PlayerDto> players;
     private Map<String, Integer> scores;
     private String currentTurnPlayerId;

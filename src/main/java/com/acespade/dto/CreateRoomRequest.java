@@ -21,4 +21,7 @@ public class CreateRoomRequest {
 
     @NotNull
     private DisconnectPolicy disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
+
+    /** Match length: 10 (quick) or 13 (full). Defaults to 13. */
+    private int maxRounds = 13;
 }

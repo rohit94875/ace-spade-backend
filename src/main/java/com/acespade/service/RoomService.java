@@ -56,7 +56,8 @@ public class RoomService {
     // -------------------------------------------------------------------------
 
     public CreateRoomResponse createRoom(String username, boolean playWithBot,
-                                         DisconnectPolicy disconnectPolicy, boolean ranked, Long userId) {
+                                         DisconnectPolicy disconnectPolicy, boolean ranked,
+                                         int maxRounds, Long userId) {
         if (ranked) {
             if (userId == null) {
                 throw new IllegalArgumentException("Login required for ranked games");
@@ -66,6 +67,8 @@ public class RoomService {
             }
             disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
         }
+
+        int resolvedMaxRounds = normalizeMaxRounds(maxRounds);
 
         username = resolveUsername(username, userId);
         String roomCode = generateUniqueRoomCode();
@@ -91,6 +94,7 @@ public class RoomService {
                 .scores(new HashMap<>())
                 .playWithBot(playWithBot)
                 .ranked(ranked)
+                .maxRounds(resolvedMaxRounds)
                 .disconnectPolicy(disconnectPolicy != null ? disconnectPolicy : DisconnectPolicy.FORFEIT_WIN)
                 .build();
         state.getScores().put(playerId, 0);
@@ -113,7 +117,7 @@ public class RoomService {
                 .build();
         sessionRepository.save(session);
 
-        log.info("Room {} created by {} (ranked={})", roomCode, username, ranked);
+        log.info("Room {} created by {} (ranked={}, maxRounds={})", roomCode, username, ranked, resolvedMaxRounds);
         return CreateRoomResponse.builder()
                 .roomCode(roomCode)
                 .playerId(playerId)
@@ -915,6 +919,16 @@ public class RoomService {
         return roomLocks.computeIfAbsent(roomCode, k -> new ReentrantLock());
     }
 
+    private static int normalizeMaxRounds(int maxRounds) {
+        if (maxRounds == 10) {
+            return 10;
+        }
+        if (maxRounds != 13) {
+            throw new IllegalArgumentException("maxRounds must be 10 or 13");
+        }
+        return 13;
+    }
+
     private String generateUniqueRoomCode() {
         String code;
         do {
@@ -935,6 +949,7 @@ public class RoomService {
                 .roomCode(state.getRoomCode())
                 .phase(state.getPhase())
                 .round(state.getRound())
+                .maxRounds(state.getMaxRounds() == 10 ? 10 : 13)
                 .players(toPlayerDtoList(state, currentTurnId))
                 .scores(state.getScores())
                 .currentTurnPlayerId(currentTurnId)

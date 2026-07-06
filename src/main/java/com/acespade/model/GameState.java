@@ -26,8 +26,12 @@ public class GameState implements Serializable {
     @Builder.Default
     private GamePhase phase = GamePhase.LOBBY;
 
-    /** Current round number, 1–13. */
+    /** Current round number, 1 through maxRounds. */
     private int round;
+
+    /** Total rounds in this match (10 quick or 13 full). */
+    @Builder.Default
+    private int maxRounds = 13;
 
     /**
      * Index into players list of who leads this round's first trick.

@@ -31,6 +31,7 @@ public class RoomController {
                 request.isPlayWithBot(),
                 request.getDisconnectPolicy(),
                 request.isRanked(),
+                request.getMaxRounds(),
                 userId));
     }
 
