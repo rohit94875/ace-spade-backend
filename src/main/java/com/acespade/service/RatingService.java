@@ -68,7 +68,7 @@ public class RatingService {
     public Map<String, RatingDeltaDto> processRankedGame(GameRecord record, List<Player> humanPlayers,
                                                          Map<String, Integer> scores) {
         List<Player> rankedHumans = humanPlayers.stream()
-                .filter(p -> !p.isBot() && p.getUserId() != null)
+                .filter(p -> p.getUserId() != null)
                 .sorted((a, b) -> Integer.compare(
                         scores.getOrDefault(b.getId(), 0),
                         scores.getOrDefault(a.getId(), 0)))
@@ -108,7 +108,7 @@ public class RatingService {
             pr.setRatingDeviation(next.getRatingDeviation());
             pr.setVolatility(next.getVolatility());
             pr.setGamesPlayed(pr.getGamesPlayed() + 1);
-            pr.setPlacementGames(Math.min(TierUtil.PLACEMENT_GAMES_REQUIRED, pr.getPlacementGames() + 1));
+            pr.setPlacementGames(pr.getPlacementGames() + 1);
             pr.setUpdatedAt(Instant.now());
             playerRatingRepository.save(pr);
 

@@ -64,6 +64,7 @@ public class RoomService {
             if (playWithBot) {
                 throw new IllegalArgumentException("Ranked games cannot include bots");
             }
+            disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
         }
 
         username = resolveUsername(username, userId);
@@ -341,6 +342,11 @@ public class RoomService {
     }
 
     public void onWebSocketDisconnect(String roomCode, String playerId) {
+        disconnectScheduler.scheduleDisconnectHandling(roomCode, playerId,
+                () -> markPlayerDisconnected(roomCode, playerId));
+    }
+
+    private void markPlayerDisconnected(String roomCode, String playerId) {
         ReentrantLock lock = getRoomLock(roomCode);
         lock.lock();
         try {
@@ -368,6 +374,7 @@ public class RoomService {
             player.setGraceExpiresAt(disconnectScheduler.getGraceExpiresAt(roomCode, playerId));
             gameStateRepository.save(state);
             broadcastPresenceUpdate(state);
+            log.info("Player {} marked disconnected in room {} (grace started)", player.getUsername(), roomCode);
         } finally {
             lock.unlock();
         }
@@ -513,7 +520,9 @@ public class RoomService {
                 return;
             }
 
-            if (state.getDisconnectPolicy() == DisconnectPolicy.BOT_TAKEOVER) {
+            if (state.isRanked()) {
+                endGameByForfeit(state, player);
+            } else if (state.getDisconnectPolicy() == DisconnectPolicy.BOT_TAKEOVER) {
                 applyBotTakeover(state, player);
                 gameStateRepository.save(state);
                 Map<String, Object> payload = new LinkedHashMap<>();
