@@ -68,7 +68,7 @@ public class RoomService {
             disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
         }
 
-        int resolvedMaxRounds = normalizeMaxRounds(maxRounds);
+        int resolvedMaxRounds = resolveMaxRounds(ranked, maxRounds);
 
         username = resolveUsername(username, userId);
         String roomCode = generateUniqueRoomCode();
@@ -919,12 +919,22 @@ public class RoomService {
         return roomLocks.computeIfAbsent(roomCode, k -> new ReentrantLock());
     }
 
-    private static int normalizeMaxRounds(int maxRounds) {
+    private static int resolveMaxRounds(boolean ranked, int maxRounds) {
+        if (!ranked) {
+            return TierUtil.CASUAL_MAX_ROUNDS;
+        }
         if (maxRounds == 10) {
             return 10;
         }
-        if (maxRounds != 13) {
-            throw new IllegalArgumentException("maxRounds must be 10 or 13");
+        return 13;
+    }
+
+    private static int normalizeStoredMaxRounds(int maxRounds) {
+        if (maxRounds == 5) {
+            return 5;
+        }
+        if (maxRounds == 10) {
+            return 10;
         }
         return 13;
     }
@@ -949,7 +959,7 @@ public class RoomService {
                 .roomCode(state.getRoomCode())
                 .phase(state.getPhase())
                 .round(state.getRound())
-                .maxRounds(state.getMaxRounds() == 10 ? 10 : 13)
+                .maxRounds(normalizeStoredMaxRounds(state.getMaxRounds()))
                 .players(toPlayerDtoList(state, currentTurnId))
                 .scores(state.getScores())
                 .currentTurnPlayerId(currentTurnId)

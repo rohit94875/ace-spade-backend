@@ -301,6 +301,12 @@ public class GameEngine {
 
     private static int effectiveMaxRounds(GameState state) {
         int max = state.getMaxRounds();
-        return max == 10 ? 10 : DEFAULT_MAX_ROUNDS;
+        if (max == 5) {
+            return 5;
+        }
+        if (max == 10) {
+            return 10;
+        }
+        return DEFAULT_MAX_ROUNDS;
     }
 }

@@ -5,7 +5,8 @@ package com.acespade.rating;
  */
 public final class TierUtil {
 
-    public static final int PLACEMENT_GAMES_REQUIRED = 5;
+    public static final int CASUAL_MAX_ROUNDS = 5;
+    public static final int PLACEMENT_GAMES_REQUIRED = 3;
     public static final int CURRENT_SEASON_ID = 1;
 
     private TierUtil() {}

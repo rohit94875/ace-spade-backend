@@ -22,6 +22,6 @@ public class CreateRoomRequest {
     @NotNull
     private DisconnectPolicy disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
 
-    /** Match length: 10 (quick) or 13 (full). Defaults to 13. */
+    /** Ranked only: 10 (quick) or 13 (full). Casual rooms always use 5 rounds. */
     private int maxRounds = 13;
 }

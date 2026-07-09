@@ -29,9 +29,9 @@ public class GameState implements Serializable {
     /** Current round number, 1 through maxRounds. */
     private int round;
 
-    /** Total rounds in this match (10 quick or 13 full). */
+    /** Total rounds: 5 casual, 10 or 13 ranked. */
     @Builder.Default
-    private int maxRounds = 13;
+    private int maxRounds = 5;
 
     /**
      * Index into players list of who leads this round's first trick.
