@@ -18,7 +18,10 @@ public class DisconnectScheduler {
 
     /** Ignore disconnect events shorter than this (STOMP/SockJS flicker, tab refocus). */
     private static final long DISCONNECT_DEBOUNCE_SECONDS = 3;
+    /** Long-absence window: after this the away player is treated as gone (forfeit / bot takeover). */
     private static final long GRACE_SECONDS = 120;
+    /** Per-turn window: how long the table waits on an away player before auto-playing their move. */
+    private static final long TURN_TIMEOUT_SECONDS = 45;
 
     private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "disconnect-grace");
@@ -29,13 +32,51 @@ public class DisconnectScheduler {
     private final ConcurrentHashMap<String, ScheduledFuture<?>> debounceTasks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ScheduledFuture<?>> graceTasks = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Long> graceExpiresAt = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ScheduledFuture<?>> turnTasks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> turnTimeoutAt = new ConcurrentHashMap<>();
 
     public long getGraceSeconds() {
         return GRACE_SECONDS;
     }
 
+    public long getTurnTimeoutSeconds() {
+        return TURN_TIMEOUT_SECONDS;
+    }
+
     public Long getGraceExpiresAt(String roomCode, String playerId) {
         return graceExpiresAt.get(playerKey(roomCode, playerId));
+    }
+
+    public Long getTurnTimeoutAt(String roomCode) {
+        return turnTimeoutAt.get(roomCode);
+    }
+
+    /**
+     * Schedules a single per-room turn timeout. Replaces any existing turn timer for the room.
+     * Used to auto-play the current away player's move so the table never stalls.
+     */
+    public void scheduleTurnTimeout(String roomCode, Runnable onExpire) {
+        cancelTurnTimeout(roomCode);
+        long expires = System.currentTimeMillis() + TURN_TIMEOUT_SECONDS * 1000L;
+        turnTimeoutAt.put(roomCode, expires);
+        ScheduledFuture<?> task = executor.schedule(() -> {
+            turnTasks.remove(roomCode);
+            turnTimeoutAt.remove(roomCode);
+            try {
+                onExpire.run();
+            } catch (Exception e) {
+                log.error("Turn timeout task failed for room {}", roomCode, e);
+            }
+        }, TURN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        turnTasks.put(roomCode, task);
+    }
+
+    public void cancelTurnTimeout(String roomCode) {
+        ScheduledFuture<?> task = turnTasks.remove(roomCode);
+        turnTimeoutAt.remove(roomCode);
+        if (task != null) {
+            task.cancel(false);
+        }
     }
 
     /**

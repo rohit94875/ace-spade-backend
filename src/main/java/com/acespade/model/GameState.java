@@ -29,7 +29,7 @@ public class GameState implements Serializable {
     /** Current round number, 1 through maxRounds. */
     private int round;
 
-    /** Total rounds: 5 casual, 10 or 13 ranked. */
+    /** Total rounds: 5 casual, 8–13 ranked. */
     @Builder.Default
     private int maxRounds = 5;
 

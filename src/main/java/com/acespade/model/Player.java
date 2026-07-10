@@ -43,6 +43,12 @@ public class Player implements Serializable {
     /** When disconnect grace expires; null if not in grace. */
     private Long graceExpiresAt;
 
+    /** Epoch millis when the player went away (backgrounded / dropped); null when present. */
+    private Long awaySince;
+
+    /** Number of times a turn was auto-played for this player because they were away. */
+    private int autoPlayCount;
+
     public void resetForRound() {
         this.hand = new ArrayList<>();
         this.bid = null;

@@ -18,6 +18,10 @@ public class PlayerPresenceDto {
     private Long graceExpiresAt;
     /** Epoch millis of last connect/disconnect activity. */
     private long lastSeenAt;
-    /** ONLINE | DISCONNECTED | GRACE | PAUSED */
+    /** ONLINE | AWAY | GRACE | PAUSED | DISCONNECTED */
     private String status;
+    /** Times a turn was auto-played for this player while away. */
+    private int autoPlayCount;
+    /** Epoch millis when this away player's current turn will be auto-played; null otherwise. */
+    private Long turnTimeoutAt;
 }

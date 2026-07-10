@@ -1,7 +1,6 @@
 package com.acespade.service;
 
 import com.acespade.dto.*;
-import com.acespade.domain.User;
 import com.acespade.model.*;
 import com.acespade.model.enums.DisconnectPolicy;
 import com.acespade.model.enums.GamePhase;
@@ -9,7 +8,6 @@ import com.acespade.rating.TierUtil;
 import com.acespade.repository.GameRecordRepository;
 import com.acespade.repository.GameStateRepository;
 import com.acespade.repository.SessionRepository;
-import com.acespade.repository.UserRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -40,7 +38,6 @@ public class RoomService {
     private final GameStateRepository gameStateRepository;
     private final SessionRepository sessionRepository;
     private final GameRecordRepository gameRecordRepository;
-    private final UserRepository userRepository;
     private final RatingService ratingService;
     private final GameEngine gameEngine;
     private final BotService botService;
@@ -49,6 +46,8 @@ public class RoomService {
     private final ObjectMapper objectMapper;
 
     private final ConcurrentHashMap<String, ReentrantLock> roomLocks = new ConcurrentHashMap<>();
+    /** roomCode -> playerId the per-turn auto-play timer is currently scheduled for. */
+    private final ConcurrentHashMap<String, String> autoPlayScheduledFor = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
 
     // -------------------------------------------------------------------------
@@ -70,7 +69,7 @@ public class RoomService {
 
         int resolvedMaxRounds = resolveMaxRounds(ranked, maxRounds);
 
-        username = resolveUsername(username, userId);
+        username = resolveNickname(username);
         String roomCode = generateUniqueRoomCode();
         String playerId = UUID.randomUUID().toString();
         String token = UUID.randomUUID().toString();
@@ -142,15 +141,12 @@ public class RoomService {
             if (state.getPlayers().size() >= gameEngine.getMaxPlayers()) {
                 throw new IllegalStateException("Room is full (max 8 players)");
             }
-            if (username.toLowerCase().startsWith("bot vitality")) {
-                throw new IllegalArgumentException("Username reserved for bots");
-            }
-            username = resolveUsername(username, userId);
+            username = resolveNickname(username);
             final String resolvedUsername = username;
             boolean nameTaken = state.getPlayers().stream()
                     .anyMatch(p -> p.getUsername().equalsIgnoreCase(resolvedUsername));
             if (nameTaken) {
-                throw new IllegalArgumentException("Username already taken in this room");
+                throw new IllegalArgumentException("Nickname already taken in this room");
             }
 
             String playerId = UUID.randomUUID().toString();
@@ -241,6 +237,7 @@ public class RoomService {
             player.setConnected(true);
             player.setLastSeenAt(System.currentTimeMillis());
             player.setGraceExpiresAt(null);
+            player.setAwaySince(null);
             gameStateRepository.save(state);
             broadcastPresenceUpdate(state);
             sendGameSnapshotToPlayer(state, playerId);
@@ -248,6 +245,9 @@ public class RoomService {
         } finally {
             lock.unlock();
         }
+        // Re-evaluate the per-turn auto-play timer: cancels it if the returning player was on
+        // turn, or leaves it running for whoever is still away and on turn.
+        scheduleAutoPlayIfCurrentAway(roomCode);
     }
 
     public void sendChatMessage(String roomCode, String playerId, String text) {
@@ -364,6 +364,9 @@ public class RoomService {
             }
             player.setConnected(false);
             player.setLastSeenAt(System.currentTimeMillis());
+            if (player.getAwaySince() == null) {
+                player.setAwaySince(System.currentTimeMillis());
+            }
 
             if (isSoloBotGame(state) && isInProgressPhase(state)) {
                 pauseGameInternal(state, playerId, true);
@@ -373,15 +376,21 @@ public class RoomService {
                 return;
             }
 
+            // Multiplayer: do NOT pause the table for routine backgrounding. The player is
+            // marked away; a long-absence timer (Tier 3) will forfeit/hand off if they never
+            // return, and their turns are auto-played (Tier 2) so the game never stalls.
             disconnectScheduler.scheduleDeparture(roomCode, playerId,
                     () -> handlePlayerDeparture(roomCode, playerId, false));
             player.setGraceExpiresAt(disconnectScheduler.getGraceExpiresAt(roomCode, playerId));
             gameStateRepository.save(state);
             broadcastPresenceUpdate(state);
-            log.info("Player {} marked disconnected in room {} (grace started)", player.getUsername(), roomCode);
+            log.info("Player {} marked away in room {} (auto-play + long-absence timer started)",
+                    player.getUsername(), roomCode);
         } finally {
             lock.unlock();
         }
+        // If it's this away player's turn right now, start the per-turn auto-play timer.
+        scheduleAutoPlayIfCurrentAway(roomCode);
     }
 
     public void onWebSocketReconnect(String roomCode, String playerId) {
@@ -501,6 +510,8 @@ public class RoomService {
 
     private void handlePlayerDeparture(String roomCode, String playerId, boolean explicitLeave) {
         boolean runBots = false;
+        // The player is genuinely gone (long absence or explicit leave): stop any per-turn auto-play.
+        clearAutoPlay(roomCode);
         ReentrantLock lock = getRoomLock(roomCode);
         lock.lock();
         try {
@@ -639,6 +650,91 @@ public class RoomService {
             } else {
                 break;
             }
+        }
+        // After bots settle, if the human whose turn it is now is away, start the auto-play timer.
+        scheduleAutoPlayIfCurrentAway(roomCode);
+    }
+
+    /**
+     * If the current turn belongs to an away (disconnected, non-bot) player, start the per-turn
+     * auto-play timer so the table never stalls. Otherwise cancels any pending turn timer.
+     */
+    private void scheduleAutoPlayIfCurrentAway(String roomCode) {
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = gameStateRepository.findByRoomCode(roomCode).orElse(null);
+            if (state == null || state.isPaused() || !isInProgressPhase(state)
+                    || state.getPlayers().isEmpty()) {
+                clearAutoPlay(roomCode);
+                return;
+            }
+            Player current = state.getPlayers().get(state.getCurrentPlayerIndex());
+            if (current.isBot() || current.isConnected()) {
+                clearAutoPlay(roomCode);
+                return;
+            }
+            String scheduledFor = autoPlayScheduledFor.get(roomCode);
+            if (current.getId().equals(scheduledFor)) {
+                return; // timer already ticking for this player's turn
+            }
+            autoPlayScheduledFor.put(roomCode, current.getId());
+            String awayPlayerId = current.getId();
+            disconnectScheduler.scheduleTurnTimeout(roomCode, () -> autoPlayTurn(roomCode, awayPlayerId));
+            broadcastPresenceUpdate(state);
+            log.info("Auto-play timer started for away player {} in room {}", current.getUsername(), roomCode);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void clearAutoPlay(String roomCode) {
+        autoPlayScheduledFor.remove(roomCode);
+        disconnectScheduler.cancelTurnTimeout(roomCode);
+    }
+
+    /**
+     * Auto-plays a safe move for an away player whose per-turn timer expired, then continues the
+     * game. Increments their auto-play counter so the UI can surface how often it happened.
+     */
+    private void autoPlayTurn(String roomCode, String playerId) {
+        autoPlayScheduledFor.remove(roomCode);
+        boolean bidding;
+        int bid = 0;
+        Card card = null;
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = gameStateRepository.findByRoomCode(roomCode).orElse(null);
+            if (state == null || state.isPaused() || !isInProgressPhase(state)
+                    || state.getPlayers().isEmpty()) {
+                return;
+            }
+            Player current = state.getPlayers().get(state.getCurrentPlayerIndex());
+            if (!current.getId().equals(playerId) || current.isConnected() || current.isBot()) {
+                return; // turn moved on or player returned
+            }
+            if (state.getPhase() == GamePhase.BIDDING) {
+                bidding = true;
+                bid = botService.decideBid(state, current);
+            } else if (state.getPhase() == GamePhase.PLAYING) {
+                bidding = false;
+                card = botService.decideCard(state, current);
+            } else {
+                return;
+            }
+            current.setAutoPlayCount(current.getAutoPlayCount() + 1);
+            gameStateRepository.save(state);
+            broadcastPresenceUpdate(state);
+            log.info("Auto-played turn for away player {} in room {} (count={})",
+                    current.getUsername(), roomCode, current.getAutoPlayCount());
+        } finally {
+            lock.unlock();
+        }
+        if (bidding) {
+            placeBid(roomCode, playerId, bid);
+        } else {
+            playCard(roomCode, playerId, card.getSuit(), card.getRank(), card.getDeckIndex());
         }
     }
 
@@ -897,13 +993,66 @@ public class RoomService {
         }
     }
 
-    private String resolveUsername(String requested, Long userId) {
-        if (userId == null) {
-            return requested.trim();
+    public UpdateNicknameResponse updateNickname(String roomCode, String sessionToken, String requestedNickname) {
+        PlayerSession session = sessionRepository.findByToken(sessionToken)
+                .orElseThrow(() -> new IllegalArgumentException("Session expired — rejoin with room code"));
+        if (!session.getRoomCode().equalsIgnoreCase(roomCode)) {
+            throw new IllegalArgumentException("Session does not match this room");
         }
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("Account not found"));
-        return user.getUsername();
+
+        String nickname = resolveNickname(requestedNickname);
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = getStateOrThrow(roomCode);
+            if (state.getPhase() != GamePhase.LOBBY) {
+                throw new IllegalStateException("Nickname can only be changed before the game starts");
+            }
+
+            Player player = state.findPlayer(session.getPlayerId());
+            if (player == null || player.isBot()) {
+                throw new IllegalArgumentException("You are no longer in this room");
+            }
+
+            if (player.getUsername().equalsIgnoreCase(nickname)) {
+                return UpdateNicknameResponse.builder().nickname(nickname).build();
+            }
+
+            boolean nameTaken = state.getPlayers().stream()
+                    .filter(p -> !p.getId().equals(player.getId()))
+                    .anyMatch(p -> p.getUsername().equalsIgnoreCase(nickname));
+            if (nameTaken) {
+                throw new IllegalArgumentException("Nickname already taken in this room");
+            }
+
+            player.setUsername(nickname);
+            session.setUsername(nickname);
+            gameStateRepository.save(state);
+            sessionRepository.save(session);
+            broadcastRoomUpdate(state);
+
+            log.info("Player {} renamed to {} in room {}", session.getPlayerId(), nickname, roomCode);
+            return UpdateNicknameResponse.builder().nickname(nickname).build();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private String resolveNickname(String requested) {
+        if (requested == null) {
+            throw new IllegalArgumentException("Nickname is required");
+        }
+        String nickname = requested.trim();
+        if (nickname.length() < 2) {
+            throw new IllegalArgumentException("Nickname must be at least 2 characters");
+        }
+        if (nickname.length() > 20) {
+            throw new IllegalArgumentException("Nickname must be at most 20 characters");
+        }
+        if (nickname.toLowerCase().startsWith("bot vitality")) {
+            throw new IllegalArgumentException("Nickname reserved for bots");
+        }
+        return nickname;
     }
 
     // -------------------------------------------------------------------------
@@ -923,20 +1072,24 @@ public class RoomService {
         if (!ranked) {
             return TierUtil.CASUAL_MAX_ROUNDS;
         }
-        if (maxRounds == 10) {
-            return 10;
-        }
-        return 13;
+        return clampRankedMaxRounds(maxRounds);
     }
 
     private static int normalizeStoredMaxRounds(int maxRounds) {
         if (maxRounds == 5) {
             return 5;
         }
-        if (maxRounds == 10) {
-            return 10;
+        return clampRankedMaxRounds(maxRounds);
+    }
+
+    private static int clampRankedMaxRounds(int maxRounds) {
+        if (maxRounds < TierUtil.RANKED_MIN_ROUNDS) {
+            return TierUtil.RANKED_MIN_ROUNDS;
         }
-        return 13;
+        if (maxRounds > TierUtil.RANKED_MAX_ROUNDS) {
+            return TierUtil.RANKED_MAX_ROUNDS;
+        }
+        return maxRounds;
     }
 
     private String generateUniqueRoomCode() {
@@ -1047,6 +1200,11 @@ public class RoomService {
                 continue;
             }
             String status = resolvePresenceStatus(state, p, now);
+            boolean onTurn = !state.getPlayers().isEmpty()
+                    && state.getPlayers().get(state.getCurrentPlayerIndex()).getId().equals(p.getId());
+            Long turnTimeoutAt = (!p.isConnected() && onTurn)
+                    ? disconnectScheduler.getTurnTimeoutAt(state.getRoomCode())
+                    : null;
             map.put(p.getId(), PlayerPresenceDto.builder()
                     .playerId(p.getId())
                     .username(p.getUsername())
@@ -1055,6 +1213,8 @@ public class RoomService {
                     .graceExpiresAt(p.getGraceExpiresAt())
                     .lastSeenAt(p.getLastSeenAt())
                     .status(status)
+                    .autoPlayCount(p.getAutoPlayCount())
+                    .turnTimeoutAt(turnTimeoutAt)
                     .build());
         }
         return map;
@@ -1067,8 +1227,9 @@ public class RoomService {
         if (p.isConnected()) {
             return "ONLINE";
         }
-        if (p.getGraceExpiresAt() != null && p.getGraceExpiresAt() > now) {
-            return "GRACE";
+        // Backgrounded / dropped but within the long-absence window: shown as "away", not alarming.
+        if (p.getAwaySince() != null || (p.getGraceExpiresAt() != null && p.getGraceExpiresAt() > now)) {
+            return "AWAY";
         }
         return "DISCONNECTED";
     }
@@ -1113,6 +1274,7 @@ public class RoomService {
                 .graceExpiresAt(p.getGraceExpiresAt())
                 .lastSeenAt(p.getLastSeenAt())
                 .presenceStatus(p.isBot() ? "ONLINE" : resolvePresenceStatus(state, p, now))
+                .autoPlayCount(p.getAutoPlayCount())
                 .build()
         ).collect(Collectors.toList());
     }

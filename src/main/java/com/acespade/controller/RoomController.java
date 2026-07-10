@@ -47,6 +47,18 @@ public class RoomController {
         }
     }
 
+    @PatchMapping("/{code}/nickname")
+    public ResponseEntity<?> updateNickname(@PathVariable String code,
+                                            @RequestHeader("X-Session-Token") String sessionToken,
+                                            @Valid @RequestBody UpdateNicknameRequest request) {
+        try {
+            return ResponseEntity.ok(roomService.updateNickname(
+                    code.toUpperCase(), sessionToken.trim(), request.getNickname()));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
     @GetMapping("/{code}")
     public ResponseEntity<?> getRoom(@PathVariable String code) {
         try {

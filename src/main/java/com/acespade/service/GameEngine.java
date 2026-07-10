@@ -1,6 +1,7 @@
 package com.acespade.service;
 
 import com.acespade.model.*;
+import com.acespade.rating.TierUtil;
 import com.acespade.model.enums.GamePhase;
 import com.acespade.model.enums.Rank;
 import com.acespade.model.enums.Suit;
@@ -301,11 +302,11 @@ public class GameEngine {
 
     private static int effectiveMaxRounds(GameState state) {
         int max = state.getMaxRounds();
-        if (max == 5) {
-            return 5;
+        if (max == TierUtil.CASUAL_MAX_ROUNDS) {
+            return TierUtil.CASUAL_MAX_ROUNDS;
         }
-        if (max == 10) {
-            return 10;
+        if (max >= TierUtil.RANKED_MIN_ROUNDS && max <= TierUtil.RANKED_MAX_ROUNDS) {
+            return max;
         }
         return DEFAULT_MAX_ROUNDS;
     }
