@@ -376,15 +376,13 @@ public class RoomService {
                 return;
             }
 
-            // Multiplayer: do NOT pause the table for routine backgrounding. The player is
-            // marked away; a long-absence timer (Tier 3) will forfeit/hand off if they never
-            // return, and their turns are auto-played (Tier 2) so the game never stalls.
-            disconnectScheduler.scheduleDeparture(roomCode, playerId,
-                    () -> handlePlayerDeparture(roomCode, playerId, false));
-            player.setGraceExpiresAt(disconnectScheduler.getGraceExpiresAt(roomCode, playerId));
+            // Multiplayer: do NOT pause the table, and never forfeit for a long absence.
+            // The player stays "away" and their turns are auto-played until they either
+            // return or the game finishes naturally. Only an explicit Leave ends the game.
+            player.setGraceExpiresAt(null);
             gameStateRepository.save(state);
             broadcastPresenceUpdate(state);
-            log.info("Player {} marked away in room {} (auto-play + long-absence timer started)",
+            log.info("Player {} marked away in room {} (auto-play active, no forfeit timer)",
                     player.getUsername(), roomCode);
         } finally {
             lock.unlock();
