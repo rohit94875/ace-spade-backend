@@ -56,7 +56,7 @@ public class RoomService {
 
     public CreateRoomResponse createRoom(String username, boolean playWithBot,
                                          DisconnectPolicy disconnectPolicy, boolean ranked,
-                                         int maxRounds, Long userId) {
+                                         int maxRounds, boolean publicRoom, Long userId) {
         if (ranked) {
             if (userId == null) {
                 throw new IllegalArgumentException("Login required for ranked games");
@@ -93,6 +93,8 @@ public class RoomService {
                 .scores(new HashMap<>())
                 .playWithBot(playWithBot)
                 .ranked(ranked)
+                // A solo-vs-bot game is never listed publicly.
+                .publicRoom(publicRoom && !playWithBot)
                 .maxRounds(resolvedMaxRounds)
                 .disconnectPolicy(disconnectPolicy != null ? disconnectPolicy : DisconnectPolicy.FORFEIT_WIN)
                 .build();
@@ -193,6 +195,29 @@ public class RoomService {
         GameState state = gameStateRepository.findByRoomCode(roomCode)
                 .orElseThrow(() -> new IllegalArgumentException("Room not found: " + roomCode));
         return toRoomStateDto(state, null);
+    }
+
+    /** Lists open, joinable public rooms — still in lobby and not yet full. */
+    public List<PublicRoomDto> listPublicRooms() {
+        int maxPlayers = gameEngine.getMaxPlayers();
+        return gameStateRepository.findAll().stream()
+                .filter(GameState::isPublicRoom)
+                .filter(s -> s.getPhase() == GamePhase.LOBBY)
+                .filter(s -> s.getPlayers().size() < maxPlayers)
+                .map(s -> {
+                    Player host = s.findPlayer(s.getHostPlayerId());
+                    return PublicRoomDto.builder()
+                            .roomCode(s.getRoomCode())
+                            .hostUsername(host != null ? host.getUsername() : "—")
+                            .playerCount(s.getPlayers().size())
+                            .maxPlayers(maxPlayers)
+                            .ranked(s.isRanked())
+                            .maxRounds(s.getMaxRounds())
+                            .playWithBot(s.isPlayWithBot())
+                            .build();
+                })
+                .sorted(Comparator.comparing(PublicRoomDto::getRoomCode))
+                .collect(Collectors.toList());
     }
 
     public SessionResumeResponse resumeSession(String token) {

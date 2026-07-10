@@ -32,7 +32,13 @@ public class RoomController {
                 request.getDisconnectPolicy(),
                 request.isRanked(),
                 request.getMaxRounds(),
+                request.isPublicRoom(),
                 userId));
+    }
+
+    @GetMapping("/public")
+    public ResponseEntity<List<PublicRoomDto>> listPublicRooms() {
+        return ResponseEntity.ok(roomService.listPublicRooms());
     }
 
     @PostMapping("/{code}/join")

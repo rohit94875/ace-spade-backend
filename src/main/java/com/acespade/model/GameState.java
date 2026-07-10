@@ -72,6 +72,10 @@ public class GameState implements Serializable {
     @Builder.Default
     private boolean ranked = false;
 
+    /** When true, the room is listed publicly for anyone to browse and join. */
+    @Builder.Default
+    private boolean publicRoom = false;
+
     /** Room option: what happens when a human leaves mid-game. */
     @Builder.Default
     private DisconnectPolicy disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;

@@ -20,6 +20,9 @@ public class CreateRoomRequest {
     /** Ranked match — requires login; never combined with bots. */
     private boolean ranked = false;
 
+    /** When true, the room is listed publicly so anyone can browse and join it. */
+    private boolean publicRoom = false;
+
     @NotNull
     private DisconnectPolicy disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
 
