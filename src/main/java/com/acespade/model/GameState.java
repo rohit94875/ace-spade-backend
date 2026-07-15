@@ -26,8 +26,12 @@ public class GameState implements Serializable {
     @Builder.Default
     private GamePhase phase = GamePhase.LOBBY;
 
-    /** Current round number, 1–13. */
+    /** Current round number, 1 through maxRounds. */
     private int round;
+
+    /** Total rounds: 5 casual, 8–13 ranked. */
+    @Builder.Default
+    private int maxRounds = 5;
 
     /**
      * Index into players list of who leads this round's first trick.
@@ -63,6 +67,14 @@ public class GameState implements Serializable {
     /** Room option: play vs BOT Vitality from lobby (host + bot). */
     @Builder.Default
     private boolean playWithBot = false;
+
+    /** Ranked match — login required, affects MMR (never with bots). */
+    @Builder.Default
+    private boolean ranked = false;
+
+    /** When true, the room is listed publicly for anyone to browse and join. */
+    @Builder.Default
+    private boolean publicRoom = false;
 
     /** Room option: what happens when a human leaves mid-game. */
     @Builder.Default

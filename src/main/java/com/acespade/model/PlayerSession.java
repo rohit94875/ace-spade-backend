@@ -19,4 +19,7 @@ public class PlayerSession implements Serializable {
     private String roomCode;
     private String username;
     private boolean host;
+
+    /** Linked account; null for guest sessions. */
+    private Long userId;
 }

@@ -18,11 +18,13 @@ public class RoomStateDto {
     private String roomCode;
     private GamePhase phase;
     private int round;
+    private int maxRounds;
     private List<PlayerDto> players;
     private Map<String, Integer> scores;
     private String currentTurnPlayerId;
     private String hostPlayerId;
     private boolean playWithBot;
+    private boolean ranked;
     private DisconnectPolicy disconnectPolicy;
     private boolean paused;
     private String pausedByPlayerId;

@@ -19,6 +19,9 @@ public class Player implements Serializable {
     private String id;
     private String username;
 
+    /** Linked account for ranked play; null for guests. */
+    private Long userId;
+
     @Builder.Default
     private List<Card> hand = new ArrayList<>();
 
@@ -39,6 +42,12 @@ public class Player implements Serializable {
 
     /** When disconnect grace expires; null if not in grace. */
     private Long graceExpiresAt;
+
+    /** Epoch millis when the player went away (backgrounded / dropped); null when present. */
+    private Long awaySince;
+
+    /** Number of times a turn was auto-played for this player because they were away. */
+    private int autoPlayCount;
 
     public void resetForRound() {
         this.hand = new ArrayList<>();
