@@ -22,4 +22,5 @@ public class PlayerDto {
     private Long graceExpiresAt;
     private long lastSeenAt;
     private String presenceStatus;
+    private int autoPlayCount;
 }

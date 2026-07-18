@@ -1,6 +1,7 @@
 package com.acespade.service;
 
 import com.acespade.model.*;
+import com.acespade.rating.TierUtil;
 import com.acespade.model.enums.GamePhase;
 import com.acespade.model.enums.Rank;
 import com.acespade.model.enums.Suit;
@@ -20,7 +21,7 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class GameEngine {
 
-    private static final int MAX_ROUNDS = 13;
+    private static final int DEFAULT_MAX_ROUNDS = 13;
     private static final int MAX_PLAYERS = 8;
 
     private final TrickResolver trickResolver;
@@ -208,7 +209,7 @@ public class GameEngine {
 
         log.debug("Round {} ended. Scores: {}", state.getRound(), state.getScores());
 
-        if (state.getRound() == MAX_ROUNDS) {
+        if (state.getRound() == effectiveMaxRounds(state)) {
             state.setPhase(GamePhase.GAME_END);
         } else {
             state.setRound(state.getRound() + 1);
@@ -297,5 +298,16 @@ public class GameEngine {
 
     public int getMaxPlayers() {
         return MAX_PLAYERS;
+    }
+
+    private static int effectiveMaxRounds(GameState state) {
+        int max = state.getMaxRounds();
+        if (max == TierUtil.CASUAL_MAX_ROUNDS) {
+            return TierUtil.CASUAL_MAX_ROUNDS;
+        }
+        if (max >= TierUtil.RANKED_MIN_ROUNDS && max <= TierUtil.RANKED_MAX_ROUNDS) {
+            return max;
+        }
+        return DEFAULT_MAX_ROUNDS;
     }
 }

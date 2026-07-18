@@ -38,4 +38,12 @@ public class GameRecord {
 
     @Column(nullable = false)
     private LocalDateTime playedAt;
+
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean ranked = false;
+
+    @Column(name = "season_id", nullable = false)
+    @Builder.Default
+    private int seasonId = 1;
 }
