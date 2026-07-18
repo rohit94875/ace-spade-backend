@@ -40,19 +40,33 @@ public class GameEngine {
 
         // Reset per-round state for each player
         state.getPlayers().forEach(Player::resetForRound);
+        // Determine the round leader (rotates every round)
+        int roundLeaderIdx = (round - 1) % numPlayers;
+        // Create and shuffle the deck
+        List<Card> deck = createShuffledDoubleDeck();
 
         // Deal cards
-        List<Card> deck = createShuffledDoubleDeck();
+
+        // Prepare hands
+        List<List<Card>> hands = new ArrayList<>();
         for (int i = 0; i < numPlayers; i++) {
-            List<Card> hand = new ArrayList<>();
-            for (int j = 0; j < round; j++) {
-                hand.add(deck.get(i * round + j));
+            hands.add(new ArrayList<>());
+        }
+
+        int deckIndex = 0;
+
+        for (int c = 0; c < round; c++) {
+            for (int offset = 0; offset < numPlayers; offset++) {
+                int playerIndex = (roundLeaderIdx + offset) % numPlayers;
+                hands.get(playerIndex).add(deck.get(deckIndex++));
             }
-            state.getPlayers().get(i).setHand(hand);
+        }
+
+        for (int i = 0; i < numPlayers; i++) {
+            state.getPlayers().get(i).setHand(hands.get(i));
         }
 
         // Bidding starts with the round leader
-        int roundLeaderIdx = (round - 1) % numPlayers;
         state.setRoundLeaderIndex(roundLeaderIdx);
         state.setLeadPlayerIndex(roundLeaderIdx);
         state.setCurrentPlayerIndex(roundLeaderIdx);
