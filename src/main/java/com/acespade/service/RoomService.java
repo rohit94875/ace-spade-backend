@@ -142,6 +142,9 @@ public class RoomService {
             if (state.getPhase() != GamePhase.LOBBY) {
                 throw new IllegalStateException("Game has already started — use rejoin if you have a seat");
             }
+            if (state.isRanked() && userId == null) {
+                throw new IllegalArgumentException("Login required to join ranked games");
+            }
             if (state.getPlayers().size() >= gameEngine.getMaxPlayers()) {
                 throw new IllegalStateException("Room is full (max 8 players)");
             }
