@@ -597,7 +597,7 @@ public class RoomService {
     }
 
     public void voteBot(String roomCode, String voterId, String targetPlayerId) {
-        if (targetPlayerId == null || targetPlayerId.isBlank()) {
+        if (targetPlayerId == null || targetPlayerId.trim().isEmpty()) {
             sendError(voterId, "Invalid vote target");
             return;
         }
