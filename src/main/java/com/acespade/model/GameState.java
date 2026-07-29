@@ -10,8 +10,10 @@ import lombok.NoArgsConstructor;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Data
 @Builder
@@ -90,6 +92,13 @@ public class GameState implements Serializable {
     /** In-room chat (most recent last; capped on insert). */
     @Builder.Default
     private List<ChatMessage> chatMessages = new ArrayList<>();
+
+    @Builder.Default
+    private List<Spectator> spectators = new ArrayList<>();
+
+    /** targetPlayerId -> voter playerIds for vote-to-bot. */
+    @Builder.Default
+    private Map<String, Set<String>> botVotes = new HashMap<>();
 
     public Player findPlayer(String playerId) {
         return players.stream()

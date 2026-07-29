@@ -10,8 +10,13 @@ import com.acespade.model.Player;
 import com.acespade.rating.Glicko2Calculator;
 import com.acespade.rating.GlickoRating;
 import com.acespade.rating.TierUtil;
-import com.acespade.repository.*;
-import lombok.RequiredArgsConstructor;
+import com.acespade.repository.GameRecordPlayerRepository;
+import com.acespade.repository.GameRecordRepository;
+import com.acespade.repository.PlayerRatingRepository;
+import com.acespade.repository.RatingHistoryRepository;
+import com.acespade.repository.UserRepository;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -32,6 +37,7 @@ public class RatingService {
     private final GameRecordPlayerRepository gameRecordPlayerRepository;
     private final UserRepository userRepository;
     private final GameRecordRepository gameRecordRepository;
+    private final ObjectMapper objectMapper;
 
     public PlayerRating getOrCreateRating(Long userId) {
         return playerRatingRepository.findByUserIdAndSeasonId(userId, TierUtil.CURRENT_SEASON_ID)
@@ -178,6 +184,33 @@ public class RatingService {
                     Instant playedAt = gr != null
                             ? gr.getPlayedAt().toInstant(ZoneOffset.UTC)
                             : Instant.now();
+                    List<OpponentScoreDto> opponents = Collections.emptyList();
+                    int placement = 1;
+                    if (gr != null) {
+                        try {
+                            Map<String, Integer> scores = objectMapper.readValue(
+                                    gr.getPlayerScoresJson(),
+                                    new TypeReference<Map<String, Integer>>() {});
+                            List<Map.Entry<String, Integer>> sorted = scores.entrySet().stream()
+                                    .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
+                                    .collect(Collectors.toList());
+                            for (int i = 0; i < sorted.size(); i++) {
+                                if (sorted.get(i).getKey().equals(grp.getUsername())) {
+                                    placement = i + 1;
+                                    break;
+                                }
+                            }
+                            opponents = sorted.stream()
+                                    .filter(e -> !e.getKey().equals(grp.getUsername()))
+                                    .map(e -> OpponentScoreDto.builder()
+                                            .username(e.getKey())
+                                            .score(e.getValue())
+                                            .build())
+                                    .collect(Collectors.toList());
+                        } catch (Exception e) {
+                            log.warn("Failed to parse scores for game {}", gr.getId(), e);
+                        }
+                    }
                     return MatchHistoryEntryDto.builder()
                             .gameRecordId(grp.getGameRecordId())
                             .roomCode(gr != null ? gr.getRoomCode() : "")
@@ -187,6 +220,13 @@ public class RatingService {
                             .ratingAfter(grp.getRatingAfter())
                             .ratingDelta(grp.getRatingDelta())
                             .playedAt(playedAt)
+                            .ranked(gr != null && gr.isRanked())
+                            .maxRounds(gr != null ? gr.getMaxRounds() : 0)
+                            .playerCount(gr != null ? gr.getPlayerCount() : 0)
+                            .placement(placement)
+                            .winnerUsername(gr != null ? gr.getWinnerUsername() : null)
+                            .winnerScore(gr != null ? gr.getWinnerScore() : 0)
+                            .opponents(opponents)
                             .build();
                 })
                 .collect(Collectors.toList());

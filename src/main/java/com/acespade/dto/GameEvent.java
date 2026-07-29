@@ -28,6 +28,9 @@ public class GameEvent {
         GAME_SNAPSHOT,
         PRESENCE_UPDATED,
         CHAT_MESSAGE,
+        PLAYER_READY,
+        BOT_VOTE_UPDATED,
+        SPECTATOR_JOINED,
         ERROR
     }
 

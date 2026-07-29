@@ -14,4 +14,8 @@ public class PublicRoomDto {
     private boolean ranked;
     private int maxRounds;
     private boolean playWithBot;
+    /** True when the match is in progress and open for spectators. */
+    private boolean spectatable;
+    private String phase;
+    private int spectatorCount;
 }

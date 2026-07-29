@@ -23,4 +23,5 @@ public class PlayerDto {
     private long lastSeenAt;
     private String presenceStatus;
     private int autoPlayCount;
+    private boolean ready;
 }

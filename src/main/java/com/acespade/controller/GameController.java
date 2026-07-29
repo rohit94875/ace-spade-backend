@@ -1,8 +1,6 @@
 package com.acespade.controller;
 
-import com.acespade.dto.BidRequest;
-import com.acespade.dto.ChatRequest;
-import com.acespade.dto.PlayCardRequest;
+import com.acespade.dto.*;
 import com.acespade.service.RoomService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -96,5 +94,21 @@ public class GameController {
                          Principal principal) {
         if (principal == null || request == null) return;
         roomService.sendChatMessage(roomCode, principal.getName(), request.getText());
+    }
+
+    @MessageMapping("/game/{roomCode}/ready")
+    public void setReady(@DestinationVariable String roomCode,
+                         @Payload ReadyRequest request,
+                         Principal principal) {
+        if (principal == null || request == null) return;
+        roomService.setReady(roomCode, principal.getName(), request.isReady());
+    }
+
+    @MessageMapping("/game/{roomCode}/vote-bot")
+    public void voteBot(@DestinationVariable String roomCode,
+                        @Payload VoteBotRequest request,
+                        Principal principal) {
+        if (principal == null || request == null) return;
+        roomService.voteBot(roomCode, principal.getName(), request.getTargetPlayerId());
     }
 }

@@ -22,4 +22,7 @@ public class PlayerSession implements Serializable {
 
     /** Linked account; null for guest sessions. */
     private Long userId;
+
+    @Builder.Default
+    private boolean spectator = false;
 }

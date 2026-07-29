@@ -34,6 +34,8 @@ public class RoomService {
     private static final String ROOM_CODE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final int ROOM_CODE_LENGTH = 6;
     private static final int MIN_PLAYERS = 2;
+    private static final int MAX_SPECTATORS = 20;
+    private static final int AUTO_PLAY_VOTE_THRESHOLD = 2;
 
     private final GameStateRepository gameStateRepository;
     private final SessionRepository sessionRepository;
@@ -57,10 +59,10 @@ public class RoomService {
     public CreateRoomResponse createRoom(String username, boolean playWithBot,
                                          DisconnectPolicy disconnectPolicy, boolean ranked,
                                          int maxRounds, boolean publicRoom, Long userId) {
+        if (userId == null) {
+            throw new IllegalArgumentException("Login required to play");
+        }
         if (ranked) {
-            if (userId == null) {
-                throw new IllegalArgumentException("Login required for ranked games");
-            }
             if (playWithBot) {
                 throw new IllegalArgumentException("Ranked games cannot include bots");
             }
@@ -128,6 +130,9 @@ public class RoomService {
     }
 
     public JoinRoomResponse joinRoom(String roomCode, String username, Long userId) {
+        if (userId == null) {
+            throw new IllegalArgumentException("Login required to play");
+        }
         ReentrantLock lock = getRoomLock(roomCode);
         lock.lock();
         try {
@@ -135,10 +140,7 @@ public class RoomService {
                     .orElseThrow(() -> new IllegalArgumentException("Room not found: " + roomCode));
 
             if (state.getPhase() != GamePhase.LOBBY) {
-                throw new IllegalStateException("Game has already started");
-            }
-            if (state.isRanked() && userId == null) {
-                throw new IllegalArgumentException("Login required to join ranked games");
+                throw new IllegalStateException("Game has already started — use rejoin if you have a seat");
             }
             if (state.getPlayers().size() >= gameEngine.getMaxPlayers()) {
                 throw new IllegalStateException("Room is full (max 8 players)");
@@ -165,6 +167,11 @@ public class RoomService {
                     .build();
             state.getPlayers().add(player);
             state.getScores().put(playerId, 0);
+            state.getPlayers().forEach(p -> {
+                if (!p.isBot()) {
+                    p.setReady(false);
+                }
+            });
             gameStateRepository.save(state);
 
             PlayerSession session = PlayerSession.builder()
@@ -191,21 +198,152 @@ public class RoomService {
         }
     }
 
+    /**
+     * Re-issues a session token for a logged-in player who already has a seat
+     * (e.g. after page refresh or expired game session token).
+     */
+    public JoinRoomResponse rejoinRoom(String roomCode, Long userId) {
+        if (userId == null) {
+            throw new IllegalArgumentException("Login required to rejoin");
+        }
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = gameStateRepository.findByRoomCode(roomCode)
+                    .orElseThrow(() -> new IllegalArgumentException("Room not found: " + roomCode));
+            if (state.getPhase() == GamePhase.GAME_END) {
+                throw new IllegalStateException("Game has ended");
+            }
+            Player player = state.getPlayers().stream()
+                    .filter(p -> !p.isBot() && userId.equals(p.getUserId()))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "No active seat for your account in this room"));
+
+            sessionRepository.deleteByPlayerId(player.getId());
+            String token = UUID.randomUUID().toString();
+            boolean host = player.getId().equals(state.getHostPlayerId());
+            PlayerSession session = PlayerSession.builder()
+                    .token(token)
+                    .playerId(player.getId())
+                    .roomCode(roomCode)
+                    .username(player.getUsername())
+                    .host(host)
+                    .userId(userId)
+                    .build();
+            sessionRepository.save(session);
+
+            player.setConnected(false);
+            player.setAwaySince(null);
+            player.setGraceExpiresAt(null);
+            player.setLastSeenAt(System.currentTimeMillis());
+            gameStateRepository.save(state);
+
+            log.info("Player {} rejoined room {} with new session", player.getUsername(), roomCode);
+            return JoinRoomResponse.builder()
+                    .roomCode(roomCode)
+                    .playerId(player.getId())
+                    .sessionToken(token)
+                    .username(player.getUsername())
+                    .build();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public JoinRoomResponse spectateRoom(String roomCode, String username, Long userId) {
+        if (userId == null) {
+            throw new IllegalArgumentException("Login required to spectate");
+        }
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = gameStateRepository.findByRoomCode(roomCode)
+                    .orElseThrow(() -> new IllegalArgumentException("Room not found: " + roomCode));
+            if (state.getPhase() == GamePhase.LOBBY) {
+                throw new IllegalStateException("Game has not started yet — join as a player instead");
+            }
+            if (state.getPhase() == GamePhase.GAME_END) {
+                throw new IllegalStateException("Game has ended");
+            }
+            boolean seated = state.getPlayers().stream()
+                    .anyMatch(p -> !p.isBot() && userId.equals(p.getUserId()));
+            if (seated) {
+                throw new IllegalStateException("You have a seat in this game — use rejoin instead");
+            }
+            if (state.getSpectators() == null) {
+                state.setSpectators(new ArrayList<>());
+            }
+            if (state.getSpectators().size() >= MAX_SPECTATORS) {
+                throw new IllegalStateException("Spectator limit reached");
+            }
+            username = resolveNickname(username);
+            final String resolvedUsername = username;
+            boolean nameTaken = state.getPlayers().stream()
+                    .anyMatch(p -> p.getUsername().equalsIgnoreCase(resolvedUsername))
+                    || state.getSpectators().stream()
+                    .anyMatch(s -> s.getUsername().equalsIgnoreCase(resolvedUsername));
+            if (nameTaken) {
+                throw new IllegalArgumentException("Nickname already taken in this room");
+            }
+
+            String spectatorId = UUID.randomUUID().toString();
+            String token = UUID.randomUUID().toString();
+            Spectator spectator = Spectator.builder()
+                    .id(spectatorId)
+                    .username(resolvedUsername)
+                    .userId(userId)
+                    .connected(false)
+                    .lastSeenAt(System.currentTimeMillis())
+                    .build();
+            state.getSpectators().add(spectator);
+            gameStateRepository.save(state);
+
+            PlayerSession session = PlayerSession.builder()
+                    .token(token)
+                    .playerId(spectatorId)
+                    .roomCode(roomCode)
+                    .username(resolvedUsername)
+                    .host(false)
+                    .userId(userId)
+                    .spectator(true)
+                    .build();
+            sessionRepository.save(session);
+
+            broadcastRoomUpdate(state);
+            log.info("Spectator {} joined room {}", resolvedUsername, roomCode);
+            return JoinRoomResponse.builder()
+                    .roomCode(roomCode)
+                    .playerId(spectatorId)
+                    .sessionToken(token)
+                    .username(resolvedUsername)
+                    .build();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     public RoomStateDto getRoomState(String roomCode) {
         GameState state = gameStateRepository.findByRoomCode(roomCode)
                 .orElseThrow(() -> new IllegalArgumentException("Room not found: " + roomCode));
         return toRoomStateDto(state, null);
     }
 
-    /** Lists open, joinable public rooms — still in lobby and not yet full. */
+    /** Lists open public rooms — lobby (joinable) and in-progress (spectatable). */
     public List<PublicRoomDto> listPublicRooms() {
         int maxPlayers = gameEngine.getMaxPlayers();
         return gameStateRepository.findAll().stream()
                 .filter(GameState::isPublicRoom)
-                .filter(s -> s.getPhase() == GamePhase.LOBBY)
-                .filter(s -> s.getPlayers().size() < maxPlayers)
+                .filter(s -> s.getPhase() != GamePhase.GAME_END)
+                .filter(s -> {
+                    if (s.getPhase() == GamePhase.LOBBY) {
+                        return s.getPlayers().size() < maxPlayers;
+                    }
+                    return isInProgressPhase(s);
+                })
                 .map(s -> {
                     Player host = s.findPlayer(s.getHostPlayerId());
+                    boolean inProgress = s.getPhase() != GamePhase.LOBBY;
                     return PublicRoomDto.builder()
                             .roomCode(s.getRoomCode())
                             .hostUsername(host != null ? host.getUsername() : "—")
@@ -214,6 +352,9 @@ public class RoomService {
                             .ranked(s.isRanked())
                             .maxRounds(s.getMaxRounds())
                             .playWithBot(s.isPlayWithBot())
+                            .spectatable(inProgress)
+                            .phase(s.getPhase().name())
+                            .spectatorCount(s.getSpectators() == null ? 0 : s.getSpectators().size())
                             .build();
                 })
                 .sorted(Comparator.comparing(PublicRoomDto::getRoomCode))
@@ -231,12 +372,24 @@ public class RoomService {
                                 .build();
                     }
                     Player player = state.findPlayer(session.getPlayerId());
+                    if (session.isSpectator()) {
+                        Spectator spectator = findSpectator(state, session.getPlayerId());
+                        if (spectator == null) {
+                            return SessionResumeResponse.builder()
+                                    .valid(false)
+                                    .message("You are no longer spectating this room")
+                                    .build();
+                        }
+                        sessionRepository.touch(session);
+                        return buildSpectatorResumeResponse(state, session, spectator);
+                    }
                     if (player == null || player.isBot()) {
                         return SessionResumeResponse.builder()
                                 .valid(false)
                                 .message("You are no longer in this room")
                                 .build();
                     }
+                    sessionRepository.touch(session);
                     syncPresenceFromScheduler(state);
                     return buildSessionResumeResponse(state, session, player);
                 })
@@ -248,6 +401,32 @@ public class RoomService {
 
     public void onWebSocketConnect(String roomCode, String playerId) {
         disconnectScheduler.cancel(roomCode, playerId);
+        Optional<PlayerSession> sessionOpt = sessionRepository.findByPlayerId(playerId);
+        if (sessionOpt.isPresent() && sessionOpt.get().isSpectator()) {
+            ReentrantLock lock = getRoomLock(roomCode);
+            lock.lock();
+            try {
+                GameState state = gameStateRepository.findByRoomCode(roomCode).orElse(null);
+                if (state == null) {
+                    return;
+                }
+                Spectator spectator = findSpectator(state, playerId);
+                if (spectator == null) {
+                    return;
+                }
+                spectator.setConnected(true);
+                spectator.setLastSeenAt(System.currentTimeMillis());
+                gameStateRepository.save(state);
+                sessionRepository.touch(sessionOpt.get());
+                sendSpectatorSnapshot(state, sessionOpt.get());
+                broadcastRoomUpdate(state);
+                log.info("Spectator {} connected to room {}", spectator.getUsername(), roomCode);
+            } finally {
+                lock.unlock();
+            }
+            return;
+        }
+
         ReentrantLock lock = getRoomLock(roomCode);
         lock.lock();
         try {
@@ -263,8 +442,10 @@ public class RoomService {
             player.setLastSeenAt(System.currentTimeMillis());
             player.setGraceExpiresAt(null);
             player.setAwaySince(null);
+            clearBotVotesForPlayer(state, playerId);
             gameStateRepository.save(state);
             broadcastPresenceUpdate(state);
+            sessionRepository.findByPlayerId(playerId).ifPresent(sessionRepository::touch);
             sendGameSnapshotToPlayer(state, playerId);
             log.info("Player {} reconnected to room {}", player.getUsername(), roomCode);
         } finally {
@@ -293,16 +474,24 @@ public class RoomService {
                 sendError(playerId, "Game has ended");
                 return;
             }
+
+            String username;
             Player player = state.findPlayer(playerId);
-            if (player == null || player.isBot()) {
-                sendError(playerId, "Cannot send chat");
-                return;
+            if (player != null && !player.isBot()) {
+                username = player.getUsername();
+            } else {
+                Spectator spectator = findSpectator(state, playerId);
+                if (spectator == null) {
+                    sendError(playerId, "Cannot send chat");
+                    return;
+                }
+                username = spectator.getUsername();
             }
 
             ChatMessage msg = ChatMessage.builder()
                     .id(UUID.randomUUID().toString())
                     .playerId(playerId)
-                    .username(player.getUsername())
+                    .username(username)
                     .text(trimmed)
                     .sentAt(System.currentTimeMillis())
                     .build();
@@ -354,6 +543,18 @@ public class RoomService {
                 }
             }
 
+            long humanCount = state.getPlayers().stream().filter(p -> !p.isBot()).count();
+            boolean skipReady = state.isPlayWithBot() && humanCount == 1;
+            if (!skipReady) {
+                boolean allReady = state.getPlayers().stream()
+                        .filter(p -> !p.isBot())
+                        .allMatch(Player::isReady);
+                if (!allReady) {
+                    sendError(playerId, "All players must mark ready before starting");
+                    return;
+                }
+            }
+
             state.setRound(1);
             state = gameEngine.startRound(state);
             gameStateRepository.save(state);
@@ -365,14 +566,170 @@ public class RoomService {
         processBotTurns(roomCode);
     }
 
+    public void setReady(String roomCode, String playerId, boolean ready) {
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = getStateOrThrow(roomCode);
+            if (state.getPhase() != GamePhase.LOBBY) {
+                sendError(playerId, "Game already started");
+                return;
+            }
+            Player player = state.findPlayer(playerId);
+            if (player == null || player.isBot()) {
+                sendError(playerId, "Cannot change ready state");
+                return;
+            }
+            player.setReady(ready);
+            gameStateRepository.save(state);
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("playerId", playerId);
+            payload.put("ready", ready);
+            payload.put("players", toPlayerDtoList(state, null));
+            broadcast(roomCode, GameEvent.of(GameEvent.EventType.PLAYER_READY, payload));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public void voteBot(String roomCode, String voterId, String targetPlayerId) {
+        if (targetPlayerId == null || targetPlayerId.isBlank()) {
+            sendError(voterId, "Invalid vote target");
+            return;
+        }
+        boolean runBots = false;
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = getStateOrThrow(roomCode);
+            if (!isInProgressPhase(state)) {
+                sendError(voterId, "Voting is only available during a game");
+                return;
+            }
+            if (voterId.equals(targetPlayerId)) {
+                sendError(voterId, "You cannot vote on yourself");
+                return;
+            }
+            Player target = state.findPlayer(targetPlayerId);
+            if (target == null || target.isBot()) {
+                sendError(voterId, "Invalid vote target");
+                return;
+            }
+            if (target.isConnected()) {
+                sendError(voterId, "Player is back online — vote not needed");
+                return;
+            }
+            if (target.getAutoPlayCount() < AUTO_PLAY_VOTE_THRESHOLD) {
+                sendError(voterId, "Vote unlocks after a player misses "
+                        + AUTO_PLAY_VOTE_THRESHOLD + " turns while away");
+                return;
+            }
+            Player voter = state.findPlayer(voterId);
+            if (voter == null || voter.isBot() || !voter.isConnected()) {
+                sendError(voterId, "Only connected players can vote");
+                return;
+            }
+
+            if (state.getBotVotes() == null) {
+                state.setBotVotes(new HashMap<>());
+            }
+            Set<String> votes = state.getBotVotes()
+                    .computeIfAbsent(targetPlayerId, k -> new HashSet<>());
+            votes.add(voterId);
+            gameStateRepository.save(state);
+
+            int eligible = countEligibleBotVoters(state, targetPlayerId);
+            int needed = eligible / 2 + 1;
+
+            Map<String, Object> votePayload = new LinkedHashMap<>();
+            votePayload.put("targetPlayerId", targetPlayerId);
+            votePayload.put("votes", new ArrayList<>(votes));
+            votePayload.put("needed", needed);
+            votePayload.put("botVotes", toBotVotesDto(state));
+            broadcast(roomCode, GameEvent.of(GameEvent.EventType.BOT_VOTE_UPDATED, votePayload));
+
+            if (votes.size() >= needed) {
+                applyBotTakeover(state, target);
+                state.getBotVotes().remove(targetPlayerId);
+                gameStateRepository.save(state);
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("playerId", targetPlayerId);
+                payload.put("botPlayerId", target.getId());
+                payload.put("botUsername", target.getUsername());
+                payload.put("players", toPlayerDtoList(state, null));
+                payload.put("botVotes", toBotVotesDto(state));
+                broadcast(roomCode, GameEvent.of(GameEvent.EventType.BOT_TAKEOVER, payload));
+                runBots = true;
+                log.info("Vote passed — {} converted to bot in room {}", target.getUsername(), roomCode);
+            }
+        } finally {
+            lock.unlock();
+        }
+        if (runBots) {
+            processBotTurns(roomCode);
+        }
+    }
+
     public void playerLeft(String roomCode, String playerId) {
         disconnectScheduler.cancel(roomCode, playerId);
+        Optional<PlayerSession> session = sessionRepository.findByPlayerId(playerId);
+        if (session.isPresent() && session.get().isSpectator()) {
+            spectatorLeft(roomCode, playerId);
+            return;
+        }
         handlePlayerDeparture(roomCode, playerId, true);
     }
 
     public void onWebSocketDisconnect(String roomCode, String playerId) {
+        Optional<PlayerSession> session = sessionRepository.findByPlayerId(playerId);
+        if (session.isPresent() && session.get().isSpectator()) {
+            markSpectatorDisconnected(roomCode, playerId);
+            return;
+        }
         disconnectScheduler.scheduleDisconnectHandling(roomCode, playerId,
                 () -> markPlayerDisconnected(roomCode, playerId));
+    }
+
+    private void markSpectatorDisconnected(String roomCode, String spectatorId) {
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = gameStateRepository.findByRoomCode(roomCode).orElse(null);
+            if (state == null) {
+                return;
+            }
+            Spectator spectator = findSpectator(state, spectatorId);
+            if (spectator == null) {
+                return;
+            }
+            spectator.setConnected(false);
+            spectator.setLastSeenAt(System.currentTimeMillis());
+            gameStateRepository.save(state);
+            broadcastRoomUpdate(state);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void spectatorLeft(String roomCode, String spectatorId) {
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = gameStateRepository.findByRoomCode(roomCode).orElse(null);
+            if (state == null) {
+                return;
+            }
+            if (state.getSpectators() != null) {
+                state.getSpectators().removeIf(s -> s.getId().equals(spectatorId));
+            }
+            sessionRepository.deleteByPlayerId(spectatorId);
+            gameStateRepository.save(state);
+            broadcastRoomUpdate(state);
+            log.info("Spectator {} left room {}", spectatorId, roomCode);
+        } finally {
+            lock.unlock();
+        }
     }
 
     private void markPlayerDisconnected(String roomCode, String playerId) {
@@ -1000,6 +1357,7 @@ public class RoomService {
                     .winnerScore(gameEngine.getWinnerScore(state))
                     .playedAt(LocalDateTime.now())
                     .ranked(state.isRanked())
+                    .maxRounds(state.getMaxRounds())
                     .seasonId(TierUtil.CURRENT_SEASON_ID)
                     .build();
 
@@ -1147,6 +1505,28 @@ public class RoomService {
                 .pausedByPlayerId(state.getPausedByPlayerId())
                 .chatMessages(toChatDtoList(state.getChatMessages()))
                 .presence(toPresenceMap(state))
+                .spectators(toSpectatorDtoList(state))
+                .botVotes(toBotVotesDto(state))
+                .build();
+    }
+
+    private SessionResumeResponse buildSpectatorResumeResponse(GameState state, PlayerSession session,
+                                                                Spectator spectator) {
+        RoomStateDto room = toRoomStateDto(state, null);
+        List<TrickCard> trick = state.getCurrentTrick() == null
+                ? Collections.emptyList() : new ArrayList<>(state.getCurrentTrick());
+        return SessionResumeResponse.builder()
+                .valid(true)
+                .spectator(true)
+                .playerId(session.getPlayerId())
+                .username(session.getUsername())
+                .host(false)
+                .roomCode(session.getRoomCode())
+                .room(room)
+                .hand(Collections.emptyList())
+                .currentTrick(trick)
+                .chatMessages(toChatDtoList(state.getChatMessages()))
+                .presence(toPresenceMap(state))
                 .build();
     }
 
@@ -1166,7 +1546,17 @@ public class RoomService {
                 .currentTrick(trick)
                 .chatMessages(toChatDtoList(state.getChatMessages()))
                 .presence(toPresenceMap(state))
+                .spectator(session.isSpectator())
                 .build();
+    }
+
+    private void sendSpectatorSnapshot(GameState state, PlayerSession session) {
+        Spectator spectator = findSpectator(state, session.getPlayerId());
+        if (spectator == null) {
+            return;
+        }
+        SessionResumeResponse snapshot = buildSpectatorResumeResponse(state, session, spectator);
+        messagingTemplate.convertAndSendToUser(session.getPlayerId(), "/queue/snapshot", snapshot);
     }
 
     private void sendGameSnapshotToPlayer(GameState state, String playerId) {
@@ -1298,7 +1688,57 @@ public class RoomService {
                 .lastSeenAt(p.getLastSeenAt())
                 .presenceStatus(p.isBot() ? "ONLINE" : resolvePresenceStatus(state, p, now))
                 .autoPlayCount(p.getAutoPlayCount())
+                .ready(p.isReady())
                 .build()
         ).collect(Collectors.toList());
+    }
+
+    private Spectator findSpectator(GameState state, String spectatorId) {
+        if (state.getSpectators() == null) {
+            return null;
+        }
+        return state.getSpectators().stream()
+                .filter(s -> s.getId().equals(spectatorId))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private List<SpectatorDto> toSpectatorDtoList(GameState state) {
+        if (state.getSpectators() == null || state.getSpectators().isEmpty()) {
+            return Collections.emptyList();
+        }
+        return state.getSpectators().stream()
+                .map(s -> SpectatorDto.builder()
+                        .id(s.getId())
+                        .username(s.getUsername())
+                        .connected(s.isConnected())
+                        .build())
+                .collect(Collectors.toList());
+    }
+
+    private Map<String, List<String>> toBotVotesDto(GameState state) {
+        if (state.getBotVotes() == null || state.getBotVotes().isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, List<String>> out = new LinkedHashMap<>();
+        state.getBotVotes().forEach((target, voters) -> out.put(target, new ArrayList<>(voters)));
+        return out;
+    }
+
+    private int countEligibleBotVoters(GameState state, String targetPlayerId) {
+        return (int) state.getPlayers().stream()
+                .filter(p -> !p.isBot())
+                .filter(p -> !p.getId().equals(targetPlayerId))
+                .filter(Player::isConnected)
+                .count();
+    }
+
+    private void clearBotVotesForPlayer(GameState state, String playerId) {
+        if (state.getBotVotes() == null || state.getBotVotes().isEmpty()) {
+            return;
+        }
+        state.getBotVotes().remove(playerId);
+        state.getBotVotes().values().forEach(v -> v.remove(playerId));
+        state.getBotVotes().entrySet().removeIf(e -> e.getValue().isEmpty());
     }
 }

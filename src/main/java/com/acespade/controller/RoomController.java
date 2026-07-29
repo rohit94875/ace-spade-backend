@@ -23,9 +23,11 @@ public class RoomController {
     private final GameRecordRepository gameRecordRepository;
 
     @PostMapping
-    public ResponseEntity<CreateRoomResponse> createRoom(@Valid @RequestBody CreateRoomRequest request,
-                                                         @AuthenticationPrincipal AuthUser user) {
-        Long userId = user != null ? user.getId() : null;
+    public ResponseEntity<?> createRoom(@Valid @RequestBody CreateRoomRequest request,
+                                        @AuthenticationPrincipal AuthUser user) {
+        if (user == null) {
+            return ResponseEntity.status(401).body("Login required to play");
+        }
         return ResponseEntity.ok(roomService.createRoom(
                 request.getUsername(),
                 request.isPlayWithBot(),
@@ -33,7 +35,7 @@ public class RoomController {
                 request.isRanked(),
                 request.getMaxRounds(),
                 request.isPublicRoom(),
-                userId));
+                user.getId()));
     }
 
     @GetMapping("/public")
@@ -45,9 +47,39 @@ public class RoomController {
     public ResponseEntity<?> joinRoom(@PathVariable String code,
                                       @Valid @RequestBody JoinRoomRequest request,
                                       @AuthenticationPrincipal AuthUser user) {
+        if (user == null) {
+            return ResponseEntity.status(401).body("Login required to play");
+        }
         try {
-            Long userId = user != null ? user.getId() : null;
-            return ResponseEntity.ok(roomService.joinRoom(code.toUpperCase(), request.getUsername(), userId));
+            return ResponseEntity.ok(roomService.joinRoom(code.toUpperCase(), request.getUsername(), user.getId()));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
+    @PostMapping("/{code}/rejoin")
+    public ResponseEntity<?> rejoinRoom(@PathVariable String code,
+                                        @AuthenticationPrincipal AuthUser user) {
+        if (user == null) {
+            return ResponseEntity.status(401).body("Login required to rejoin");
+        }
+        try {
+            return ResponseEntity.ok(roomService.rejoinRoom(code.toUpperCase(), user.getId()));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        }
+    }
+
+    @PostMapping("/{code}/spectate")
+    public ResponseEntity<?> spectateRoom(@PathVariable String code,
+                                          @Valid @RequestBody JoinRoomRequest request,
+                                          @AuthenticationPrincipal AuthUser user) {
+        if (user == null) {
+            return ResponseEntity.status(401).body("Login required to spectate");
+        }
+        try {
+            return ResponseEntity.ok(roomService.spectateRoom(
+                    code.toUpperCase(), request.getUsername(), user.getId()));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         }

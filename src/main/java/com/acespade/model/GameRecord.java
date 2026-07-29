@@ -43,6 +43,10 @@ public class GameRecord {
     @Builder.Default
     private boolean ranked = false;
 
+    @Column(nullable = false)
+    @Builder.Default
+    private int maxRounds = 5;
+
     @Column(name = "season_id", nullable = false)
     @Builder.Default
     private int seasonId = 1;
