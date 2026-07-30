@@ -41,9 +41,7 @@ public final class TierUtil {
         if (mmr < 1950) return "Diamond 1";
 
         if (mmr < 1975) return "Master";
-        if (mmr < 2000) return "ACE KING";
-
-        return "Challenger";
+        return "ACE KING";
     }
 
     public static boolean isPlacementComplete(int placementGames) {
