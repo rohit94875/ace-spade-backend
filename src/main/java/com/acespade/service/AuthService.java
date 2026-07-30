@@ -96,6 +96,10 @@ public class AuthService {
         return ratingService.toProfile(entity);
     }
 
+    public boolean userExists(Long userId) {
+        return userId != null && userRepository.existsById(userId);
+    }
+
     private AuthResponse buildAuthResponse(User user) {
         String accessToken = jwtService.createAccessToken(user.getId(), user.getEmail(), user.getUsername());
         String refreshToken = createRefreshToken(user.getId());

@@ -47,6 +47,23 @@ public class RankingController {
         return ResponseEntity.ok(history);
     }
 
+    @GetMapping("/users/{userId}")
+    public ResponseEntity<?> publicProfile(@PathVariable Long userId) {
+        try {
+            return ResponseEntity.ok(ratingService.getPublicProfile(userId));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @GetMapping("/history/{userId}")
+    public ResponseEntity<List<MatchHistoryEntryDto>> publicHistory(@PathVariable Long userId) {
+        if (!authService.userExists(userId)) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(ratingService.getMatchHistory(userId));
+    }
+
     private Map<String, String> errorBody(String message) {
         Map<String, String> body = new HashMap<>();
         body.put("message", message);

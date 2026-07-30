@@ -195,13 +195,9 @@ public class RoomService {
                     .connected(false)
                     .lastSeenAt(System.currentTimeMillis())
                     .build();
+            player.setReady(false);
             state.getPlayers().add(player);
             state.getScores().put(playerId, 0);
-            state.getPlayers().forEach(p -> {
-                if (!p.isBot()) {
-                    p.setReady(false);
-                }
-            });
             gameStateRepository.save(state);
 
             PlayerSession session = PlayerSession.builder()
@@ -1719,6 +1715,7 @@ public class RoomService {
                 .presenceStatus(p.isBot() ? "ONLINE" : resolvePresenceStatus(state, p, now))
                 .autoPlayCount(p.getAutoPlayCount())
                 .ready(p.isReady())
+                .tier(p.isBot() ? null : ratingService.tierBadgeForUser(p.getUserId()))
                 .build()
         ).collect(Collectors.toList());
     }

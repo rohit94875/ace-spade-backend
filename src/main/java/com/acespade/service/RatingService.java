@@ -67,6 +67,37 @@ public class RatingService {
                 .build();
     }
 
+    public PublicUserProfileDto toPublicProfile(User user, PlayerRating rating) {
+        boolean placementComplete = TierUtil.isPlacementComplete(rating.getPlacementGames());
+        return PublicUserProfileDto.builder()
+                .id(user.getId())
+                .username(user.getUsername())
+                .mmr(Math.round(rating.getRating() * 10.0) / 10.0)
+                .tier(TierUtil.tierBadge(rating.getPlacementGames(), rating.getRating()))
+                .placementComplete(placementComplete)
+                .placementGames(rating.getPlacementGames())
+                .placementRequired(TierUtil.PLACEMENT_GAMES_REQUIRED)
+                .gamesPlayed(rating.getGamesPlayed())
+                .seasonId(rating.getSeasonId())
+                .build();
+    }
+
+    public PublicUserProfileDto getPublicProfile(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        PlayerRating rating = getOrCreateRating(userId);
+        return toPublicProfile(user, rating);
+    }
+
+    /** Tier badge for in-game display; null if still in placement. */
+    public String tierBadgeForUser(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        PlayerRating rating = getOrCreateRating(userId);
+        return TierUtil.tierBadge(rating.getPlacementGames(), rating.getRating());
+    }
+
     @Transactional
     public Map<String, RatingDeltaDto> processRankedGame(GameRecord record, List<Player> humanPlayers,
                                                          Map<String, Integer> scores) {
