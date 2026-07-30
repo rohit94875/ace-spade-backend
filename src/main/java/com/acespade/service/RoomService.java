@@ -156,6 +156,33 @@ public class RoomService {
                 throw new IllegalArgumentException("Nickname already taken in this room");
             }
 
+            Player existingSeat = state.getPlayers().stream()
+                    .filter(p -> !p.isBot() && userId.equals(p.getUserId()))
+                    .findFirst()
+                    .orElse(null);
+            if (existingSeat != null) {
+                sessionRepository.deleteByPlayerId(existingSeat.getId());
+                String token = UUID.randomUUID().toString();
+                boolean host = existingSeat.getId().equals(state.getHostPlayerId());
+                PlayerSession session = PlayerSession.builder()
+                        .token(token)
+                        .playerId(existingSeat.getId())
+                        .roomCode(roomCode)
+                        .username(existingSeat.getUsername())
+                        .host(host)
+                        .userId(userId)
+                        .build();
+                sessionRepository.save(session);
+                log.info("Account {} already seated as {} in room {} — re-bound session (no duplicate)",
+                        userId, existingSeat.getUsername(), roomCode);
+                return JoinRoomResponse.builder()
+                        .roomCode(roomCode)
+                        .playerId(existingSeat.getId())
+                        .sessionToken(token)
+                        .username(existingSeat.getUsername())
+                        .build();
+            }
+
             String playerId = UUID.randomUUID().toString();
             String token = UUID.randomUUID().toString();
 
