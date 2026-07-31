@@ -482,13 +482,8 @@ public class RoomService {
         scheduleAutoPlayIfCurrentAway(roomCode);
     }
 
-    public void sendChatMessage(String roomCode, String playerId, String text) {
-        if (text == null) {
-            return;
-        }
-        String trimmed = text.trim();
-        if (trimmed.isEmpty() || trimmed.length() > 300) {
-            sendError(playerId, "Message must be 1–300 characters");
+    public void sendChatMessage(String roomCode, String playerId, ChatRequest request) {
+        if (request == null) {
             return;
         }
 
@@ -514,11 +509,20 @@ public class RoomService {
                 username = spectator.getUsername();
             }
 
+            String text = request.getText() != null ? request.getText().trim() : "";
+            if (text.isEmpty() || text.length() > 300) {
+                sendError(playerId, "Message must be 1–300 characters");
+                return;
+            }
+
+            List<String> mentions = validateMentions(request.getMentions(), state);
+
             ChatMessage msg = ChatMessage.builder()
                     .id(UUID.randomUUID().toString())
                     .playerId(playerId)
                     .username(username)
-                    .text(trimmed)
+                    .text(text)
+                    .mentions(mentions.isEmpty() ? null : mentions)
                     .sentAt(System.currentTimeMillis())
                     .build();
             if (state.getChatMessages() == null) {
@@ -1019,7 +1023,7 @@ public class RoomService {
                 .winnerScore(state.getScores().getOrDefault(winner.getId(), 0))
                 .forfeit(true)
                 .forfeitedUsername(forfeiter.getUsername())
-                .ratingUpdates(saveGameRecord(state))
+                .ratingUpdates(saveGameRecord(state, forfeiter.getId()))
                 .build();
 
         broadcast(state.getRoomCode(), GameEvent.of(GameEvent.EventType.GAME_ENDED, payload));
@@ -1334,7 +1338,7 @@ public class RoomService {
 
         Map<String, RatingDeltaDto> ratingUpdates = null;
         if (gameOver) {
-            ratingUpdates = saveGameRecord(state);
+            ratingUpdates = saveGameRecord(state, null);
         }
 
         RoundEndedPayload payload = RoundEndedPayload.builder()
@@ -1367,7 +1371,7 @@ public class RoomService {
     // Persistence
     // -------------------------------------------------------------------------
 
-    private Map<String, RatingDeltaDto> saveGameRecord(GameState state) {
+    private Map<String, RatingDeltaDto> saveGameRecord(GameState state, String forfeiterPlayerId) {
         try {
             Map<String, Integer> usernameScores = new LinkedHashMap<>();
             for (Player p : state.getPlayers()) {
@@ -1375,12 +1379,28 @@ public class RoomService {
             }
             String scoresJson = objectMapper.writeValueAsString(usernameScores);
 
+            String winnerUsername;
+            int winnerScore;
+            if (forfeiterPlayerId != null) {
+                List<Player> remaining = state.getPlayers().stream()
+                        .filter(p -> !p.getId().equals(forfeiterPlayerId))
+                        .collect(Collectors.toList());
+                Player winner = remaining.stream()
+                        .max(Comparator.comparingInt(p -> state.getScores().getOrDefault(p.getId(), 0)))
+                        .orElse(remaining.isEmpty() ? state.findPlayer(forfeiterPlayerId) : remaining.get(0));
+                winnerUsername = winner != null ? winner.getUsername() : gameEngine.getWinnerUsername(state);
+                winnerScore = winner != null ? state.getScores().getOrDefault(winner.getId(), 0) : gameEngine.getWinnerScore(state);
+            } else {
+                winnerUsername = gameEngine.getWinnerUsername(state);
+                winnerScore = gameEngine.getWinnerScore(state);
+            }
+
             GameRecord record = GameRecord.builder()
                     .roomCode(state.getRoomCode())
                     .playerCount(state.getPlayers().size())
                     .playerScoresJson(scoresJson)
-                    .winnerUsername(gameEngine.getWinnerUsername(state))
-                    .winnerScore(gameEngine.getWinnerScore(state))
+                    .winnerUsername(winnerUsername)
+                    .winnerScore(winnerScore)
                     .playedAt(LocalDateTime.now())
                     .ranked(state.isRanked())
                     .maxRounds(state.getMaxRounds())
@@ -1391,6 +1411,12 @@ public class RoomService {
             log.info("Game record saved for room {} (ranked={})", state.getRoomCode(), state.isRanked());
 
             if (state.isRanked() && !state.isPlayWithBot()) {
+                if (forfeiterPlayerId != null) {
+                    Player forfeiter = state.findPlayer(forfeiterPlayerId);
+                    if (forfeiter != null) {
+                        return ratingService.processRankedForfeit(record, forfeiter, state.getPlayers());
+                    }
+                }
                 return ratingService.processRankedGame(record, state.getPlayers(), state.getScores());
             }
             return null;
@@ -1398,6 +1424,25 @@ public class RoomService {
             log.error("Failed to serialize game record for room {}", state.getRoomCode(), e);
             return null;
         }
+    }
+
+    private List<String> validateMentions(List<String> mentions, GameState state) {
+        if (mentions == null || mentions.isEmpty()) {
+            return Collections.emptyList();
+        }
+        Set<String> allowed = new HashSet<>();
+        for (Player p : state.getPlayers()) {
+            allowed.add(p.getUsername());
+        }
+        if (state.getSpectators() != null) {
+            for (Spectator s : state.getSpectators()) {
+                allowed.add(s.getUsername());
+            }
+        }
+        return mentions.stream()
+                .filter(name -> name != null && allowed.contains(name))
+                .distinct()
+                .collect(Collectors.toList());
     }
 
     public UpdateNicknameResponse updateNickname(String roomCode, String sessionToken, String requestedNickname) {
@@ -1686,6 +1731,7 @@ public class RoomService {
                 .playerId(msg.getPlayerId())
                 .username(msg.getUsername())
                 .text(msg.getText())
+                .mentions(msg.getMentions())
                 .sentAt(msg.getSentAt())
                 .build();
     }

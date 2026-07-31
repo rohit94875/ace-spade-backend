@@ -180,6 +180,82 @@ public class RatingService {
         return deltas;
     }
 
+    /**
+     * Ranked forfeit: only the leaver loses MMR; remaining players are unchanged.
+     */
+    @Transactional
+    public Map<String, RatingDeltaDto> processRankedForfeit(GameRecord record, Player forfeiter,
+                                                             List<Player> allPlayers) {
+        if (forfeiter.getUserId() == null) {
+            log.warn("Forfeit in ranked game {} had no authenticated forfeiter — skipping rating", record.getId());
+            return Collections.emptyMap();
+        }
+
+        List<Player> opponents = allPlayers.stream()
+                .filter(p -> p.getUserId() != null && !p.getId().equals(forfeiter.getId()))
+                .collect(Collectors.toList());
+
+        if (opponents.isEmpty()) {
+            log.warn("Forfeit in ranked game {} had no authenticated opponents — skipping rating", record.getId());
+            return Collections.emptyMap();
+        }
+
+        PlayerRating pr = getOrCreateRating(forfeiter.getUserId());
+        double beforeRating = pr.getRating();
+        GlickoRating current = new GlickoRating(pr.getRating(), pr.getRatingDeviation(), pr.getVolatility());
+
+        for (Player opp : opponents) {
+            PlayerRating oppPr = getOrCreateRating(opp.getUserId());
+            GlickoRating oppRating = new GlickoRating(oppPr.getRating(), oppPr.getRatingDeviation(), oppPr.getVolatility());
+            List<GlickoRating> pair = Arrays.asList(current, oppRating);
+            List<Integer> ranks = Arrays.asList(2, 1);
+            current = Glicko2Calculator.updateRatings(pair, ranks).get(0);
+        }
+
+        double afterRating = current.getRating();
+        double delta = afterRating - beforeRating;
+
+        pr.setRating(afterRating);
+        pr.setRatingDeviation(current.getRatingDeviation());
+        pr.setVolatility(current.getVolatility());
+        pr.setGamesPlayed(pr.getGamesPlayed() + 1);
+        pr.setPlacementGames(pr.getPlacementGames() + 1);
+        pr.setUpdatedAt(Instant.now());
+        playerRatingRepository.save(pr);
+
+        RatingHistory history = new RatingHistory();
+        history.setUserId(forfeiter.getUserId());
+        history.setSeasonId(TierUtil.CURRENT_SEASON_ID);
+        history.setGameRecordId(record.getId());
+        history.setRatingBefore(beforeRating);
+        history.setRatingAfter(afterRating);
+        history.setRatingDelta(delta);
+        ratingHistoryRepository.save(history);
+
+        GameRecordPlayer grp = new GameRecordPlayer();
+        grp.setGameRecordId(record.getId());
+        grp.setUserId(forfeiter.getUserId());
+        grp.setUsername(forfeiter.getUsername());
+        grp.setScore(0);
+        grp.setRatingBefore(beforeRating);
+        grp.setRatingAfter(afterRating);
+        grp.setRatingDelta(delta);
+        gameRecordPlayerRepository.save(grp);
+
+        Map<String, RatingDeltaDto> deltas = new LinkedHashMap<>();
+        deltas.put(forfeiter.getId(), RatingDeltaDto.builder()
+                .userId(forfeiter.getUserId())
+                .username(forfeiter.getUsername())
+                .ratingBefore(Math.round(beforeRating * 10.0) / 10.0)
+                .ratingAfter(Math.round(afterRating * 10.0) / 10.0)
+                .ratingDelta(Math.round(delta * 10.0) / 10.0)
+                .tier(TierUtil.tierBadge(pr.getPlacementGames(), afterRating))
+                .placementComplete(TierUtil.isPlacementComplete(pr.getPlacementGames()))
+                .placementGames(pr.getPlacementGames())
+                .build());
+        return deltas;
+    }
+
     public List<LeaderboardEntryDto> getLeaderboard(int limit) {
         int capped = Math.min(Math.max(limit, 1), 100);
         List<PlayerRating> ratings = playerRatingRepository.findBySeasonIdOrderByRatingDesc(

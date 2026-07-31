@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -14,5 +16,6 @@ public class ChatMessageDto {
     private String playerId;
     private String username;
     private String text;
+    private List<String> mentions;
     private long sentAt;
 }

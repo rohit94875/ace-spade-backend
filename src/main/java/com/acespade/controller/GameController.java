@@ -93,7 +93,7 @@ public class GameController {
                          @Payload ChatRequest request,
                          Principal principal) {
         if (principal == null || request == null) return;
-        roomService.sendChatMessage(roomCode, principal.getName(), request.getText());
+        roomService.sendChatMessage(roomCode, principal.getName(), request);
     }
 
     @MessageMapping("/game/{roomCode}/ready")

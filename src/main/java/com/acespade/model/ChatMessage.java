@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
+import java.util.List;
 
 @Data
 @Builder
@@ -18,6 +19,7 @@ public class ChatMessage implements Serializable {
     private String playerId;
     private String username;
     private String text;
+    private List<String> mentions;
     /** Epoch millis. */
     private long sentAt;
 }
