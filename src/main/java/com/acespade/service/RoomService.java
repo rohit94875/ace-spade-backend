@@ -277,6 +277,28 @@ public class RoomService {
         }
     }
 
+    /** In-progress game where this account still has a seat (for rejoin UI). */
+    public Optional<ActiveGameDto> findActiveGameForUser(Long userId) {
+        if (userId == null) {
+            return Optional.empty();
+        }
+        for (GameState state : gameStateRepository.findAll()) {
+            if (state.getPhase() == GamePhase.GAME_END) {
+                continue;
+            }
+            for (Player p : state.getPlayers()) {
+                if (!p.isBot() && userId.equals(p.getUserId())) {
+                    return Optional.of(ActiveGameDto.builder()
+                            .roomCode(state.getRoomCode())
+                            .phase(state.getPhase().name())
+                            .hasSeat(true)
+                            .build());
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
     public JoinRoomResponse spectateRoom(String roomCode, String username, Long userId) {
         if (userId == null) {
             throw new IllegalArgumentException("Login required to spectate");

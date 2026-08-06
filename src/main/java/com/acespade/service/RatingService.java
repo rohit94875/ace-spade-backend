@@ -15,6 +15,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +36,13 @@ public class RatingService {
     private final UserRepository userRepository;
     private final GameRecordRepository gameRecordRepository;
     private final ObjectMapper objectMapper;
+
+    @Value("${ace.rating.forfeit-base-mmr:25.0}")
+    private double forfeitBaseMmr;
+
+    public double leavePenaltyMmr(int leaveCount) {
+        return Math.pow(2, leaveCount) * forfeitBaseMmr;
+    }
 
     public PlayerRating getOrCreateRating(Long userId) {
         return playerRatingRepository.findByUserIdAndSeasonId(userId, TierUtil.CURRENT_SEASON_ID)
@@ -64,6 +72,8 @@ public class RatingService {
                 .placementRequired(TierUtil.PLACEMENT_GAMES_REQUIRED)
                 .gamesPlayed(rating.getGamesPlayed())
                 .seasonId(rating.getSeasonId())
+                .leaveCount(rating.getLeaveCount())
+                .nextLeavePenaltyMmr(Math.round(leavePenaltyMmr(rating.getLeaveCount()) * 10.0) / 10.0)
                 .build();
     }
 
@@ -79,6 +89,8 @@ public class RatingService {
                 .placementRequired(TierUtil.PLACEMENT_GAMES_REQUIRED)
                 .gamesPlayed(rating.getGamesPlayed())
                 .seasonId(rating.getSeasonId())
+                .leaveCount(rating.getLeaveCount())
+                .nextLeavePenaltyMmr(Math.round(leavePenaltyMmr(rating.getLeaveCount()) * 10.0) / 10.0)
                 .build();
     }
 
@@ -181,7 +193,7 @@ public class RatingService {
     }
 
     /**
-     * Ranked forfeit: only the leaver loses MMR; remaining players are unchanged.
+     * Ranked forfeit: only the leaver loses MMR (2^n × base); remaining players unchanged.
      */
     @Transactional
     public Map<String, RatingDeltaDto> processRankedForfeit(GameRecord record, Player forfeiter,
@@ -191,37 +203,22 @@ public class RatingService {
             return Collections.emptyMap();
         }
 
-        List<Player> opponents = allPlayers.stream()
-                .filter(p -> p.getUserId() != null && !p.getId().equals(forfeiter.getId()))
-                .collect(Collectors.toList());
-
-        if (opponents.isEmpty()) {
-            log.warn("Forfeit in ranked game {} had no authenticated opponents — skipping rating", record.getId());
-            return Collections.emptyMap();
-        }
-
         PlayerRating pr = getOrCreateRating(forfeiter.getUserId());
         double beforeRating = pr.getRating();
-        GlickoRating current = new GlickoRating(pr.getRating(), pr.getRatingDeviation(), pr.getVolatility());
-
-        for (Player opp : opponents) {
-            PlayerRating oppPr = getOrCreateRating(opp.getUserId());
-            GlickoRating oppRating = new GlickoRating(oppPr.getRating(), oppPr.getRatingDeviation(), oppPr.getVolatility());
-            List<GlickoRating> pair = Arrays.asList(current, oppRating);
-            List<Integer> ranks = Arrays.asList(2, 1);
-            current = Glicko2Calculator.updateRatings(pair, ranks).get(0);
-        }
-
-        double afterRating = current.getRating();
+        int n = pr.getLeaveCount();
+        double penalty = leavePenaltyMmr(n);
+        double afterRating = Math.max(0, beforeRating - penalty);
         double delta = afterRating - beforeRating;
 
         pr.setRating(afterRating);
-        pr.setRatingDeviation(current.getRatingDeviation());
-        pr.setVolatility(current.getVolatility());
+        pr.setLeaveCount(n + 1);
         pr.setGamesPlayed(pr.getGamesPlayed() + 1);
         pr.setPlacementGames(pr.getPlacementGames() + 1);
         pr.setUpdatedAt(Instant.now());
         playerRatingRepository.save(pr);
+
+        log.info("Ranked forfeit penalty userId={} leaveCount={} penalty={} rating {} -> {}",
+                forfeiter.getUserId(), n, penalty, beforeRating, afterRating);
 
         RatingHistory history = new RatingHistory();
         history.setUserId(forfeiter.getUserId());

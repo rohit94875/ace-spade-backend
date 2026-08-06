@@ -19,4 +19,6 @@ public class PublicUserProfileDto {
     private int placementRequired;
     private int gamesPlayed;
     private int seasonId;
+    private int leaveCount;
+    private double nextLeavePenaltyMmr;
 }

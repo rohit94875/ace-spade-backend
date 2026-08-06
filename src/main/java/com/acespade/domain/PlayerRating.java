@@ -32,6 +32,9 @@ public class PlayerRating {
     @Column(name = "placement_games", nullable = false)
     private int placementGames = 0;
 
+    @Column(name = "leave_count", nullable = false)
+    private int leaveCount = 0;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 
@@ -51,6 +54,8 @@ public class PlayerRating {
     public void setGamesPlayed(int gamesPlayed) { this.gamesPlayed = gamesPlayed; }
     public int getPlacementGames() { return placementGames; }
     public void setPlacementGames(int placementGames) { this.placementGames = placementGames; }
+    public int getLeaveCount() { return leaveCount; }
+    public void setLeaveCount(int leaveCount) { this.leaveCount = leaveCount; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 }
