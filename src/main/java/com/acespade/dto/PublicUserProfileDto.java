@@ -9,9 +9,8 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class UserProfileDto {
+public class PublicUserProfileDto {
     private Long id;
-    private String email;
     private String username;
     private Double mmr;
     private String tier;
@@ -20,8 +19,6 @@ public class UserProfileDto {
     private int placementRequired;
     private int gamesPlayed;
     private int seasonId;
-    /** Ranked games forfeited by leaving (this season). */
     private int leaveCount;
-    /** MMR loss if they leave again: 2^leaveCount * base. */
     private double nextLeavePenaltyMmr;
 }

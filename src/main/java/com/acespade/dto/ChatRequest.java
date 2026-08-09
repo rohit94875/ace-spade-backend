@@ -2,12 +2,13 @@ package com.acespade.dto;
 
 import lombok.Data;
 
-import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.Size;
+import java.util.List;
 
 @Data
 public class ChatRequest {
-    @NotBlank
     @Size(max = 300)
     private String text;
+
+    private List<String> mentions;
 }

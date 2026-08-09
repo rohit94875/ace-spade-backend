@@ -5,17 +5,12 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.util.List;
-
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class ChatMessageDto {
+public class SpectatorDto {
     private String id;
-    private String playerId;
     private String username;
-    private String text;
-    private List<String> mentions;
-    private long sentAt;
+    private boolean connected;
 }

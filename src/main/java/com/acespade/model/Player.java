@@ -49,6 +49,10 @@ public class Player implements Serializable {
     /** Number of times a turn was auto-played for this player because they were away. */
     private int autoPlayCount;
 
+    /** Lobby ready-up before host can start. */
+    @Builder.Default
+    private boolean ready = false;
+
     public void resetForRound() {
         this.hand = new ArrayList<>();
         this.bid = null;

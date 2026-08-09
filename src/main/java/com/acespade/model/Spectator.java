@@ -11,18 +11,13 @@ import java.io.Serializable;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class PlayerSession implements Serializable {
+public class Spectator implements Serializable {
     private static final long serialVersionUID = 1L;
 
-    private String token;
-    private String playerId;
-    private String roomCode;
+    private String id;
     private String username;
-    private boolean host;
-
-    /** Linked account; null for guest sessions. */
     private Long userId;
-
     @Builder.Default
-    private boolean spectator = false;
+    private boolean connected = false;
+    private long lastSeenAt;
 }

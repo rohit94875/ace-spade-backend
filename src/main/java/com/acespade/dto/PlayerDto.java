@@ -23,4 +23,8 @@ public class PlayerDto {
     private long lastSeenAt;
     private String presenceStatus;
     private int autoPlayCount;
+    private boolean ready;
+
+    /** Ranked tier badge after placement; null while placing or for bots/guests. */
+    private String tier;
 }

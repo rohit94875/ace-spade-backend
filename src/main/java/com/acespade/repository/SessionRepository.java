@@ -18,7 +18,7 @@ public class SessionRepository {
 
     private static final String KEY_PREFIX = "session:";
     private static final String PLAYER_KEY_PREFIX = "player:";
-    private static final long TTL_HOURS = 24;
+    private static final long TTL_HOURS = 168;
 
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
@@ -68,5 +68,18 @@ public class SessionRepository {
         } else {
             redisTemplate.delete(PLAYER_KEY_PREFIX + playerId);
         }
+    }
+
+    public Optional<PlayerSession> findByPlayerId(String playerId) {
+        String token = redisTemplate.opsForValue().get(PLAYER_KEY_PREFIX + playerId);
+        if (token == null) {
+            return Optional.empty();
+        }
+        return findByToken(token);
+    }
+
+    /** Extends session TTL after reconnect or resume. */
+    public void touch(PlayerSession session) {
+        save(session);
     }
 }

@@ -1,9 +1,11 @@
 package com.acespade.controller;
 
 import com.acespade.dto.SessionResumeResponse;
+import com.acespade.security.AuthUser;
 import com.acespade.service.RoomService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -31,5 +33,16 @@ public class SessionController {
             return ResponseEntity.status(404).body(response);
         }
         return ResponseEntity.ok(response);
+    }
+
+    /** Logged-in player with a seat in an active game (for manual rejoin). */
+    @GetMapping("/active")
+    public ResponseEntity<?> activeGame(@AuthenticationPrincipal AuthUser user) {
+        if (user == null) {
+            return ResponseEntity.status(401).body("Login required");
+        }
+        return roomService.findActiveGameForUser(user.getId())
+                .<ResponseEntity<?>>map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
     }
 }

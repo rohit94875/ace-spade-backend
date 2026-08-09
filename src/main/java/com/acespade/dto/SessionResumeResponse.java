@@ -26,4 +26,5 @@ public class SessionResumeResponse {
     private List<ChatMessageDto> chatMessages;
     private Map<String, PlayerPresenceDto> presence;
     private String message;
+    private boolean spectator;
 }

@@ -11,8 +11,11 @@ import com.acespade.rating.Glicko2Calculator;
 import com.acespade.rating.GlickoRating;
 import com.acespade.rating.TierUtil;
 import com.acespade.repository.*;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +35,14 @@ public class RatingService {
     private final GameRecordPlayerRepository gameRecordPlayerRepository;
     private final UserRepository userRepository;
     private final GameRecordRepository gameRecordRepository;
+    private final ObjectMapper objectMapper;
+
+    @Value("${ace.rating.forfeit-base-mmr:25.0}")
+    private double forfeitBaseMmr;
+
+    public double leavePenaltyMmr(int leaveCount) {
+        return Math.pow(2, leaveCount) * forfeitBaseMmr;
+    }
 
     public PlayerRating getOrCreateRating(Long userId) {
         return playerRatingRepository.findByUserIdAndSeasonId(userId, TierUtil.CURRENT_SEASON_ID)
@@ -61,7 +72,42 @@ public class RatingService {
                 .placementRequired(TierUtil.PLACEMENT_GAMES_REQUIRED)
                 .gamesPlayed(rating.getGamesPlayed())
                 .seasonId(rating.getSeasonId())
+                .leaveCount(rating.getLeaveCount())
+                .nextLeavePenaltyMmr(Math.round(leavePenaltyMmr(rating.getLeaveCount()) * 10.0) / 10.0)
                 .build();
+    }
+
+    public PublicUserProfileDto toPublicProfile(User user, PlayerRating rating) {
+        boolean placementComplete = TierUtil.isPlacementComplete(rating.getPlacementGames());
+        return PublicUserProfileDto.builder()
+                .id(user.getId())
+                .username(user.getUsername())
+                .mmr(Math.round(rating.getRating() * 10.0) / 10.0)
+                .tier(TierUtil.tierBadge(rating.getPlacementGames(), rating.getRating()))
+                .placementComplete(placementComplete)
+                .placementGames(rating.getPlacementGames())
+                .placementRequired(TierUtil.PLACEMENT_GAMES_REQUIRED)
+                .gamesPlayed(rating.getGamesPlayed())
+                .seasonId(rating.getSeasonId())
+                .leaveCount(rating.getLeaveCount())
+                .nextLeavePenaltyMmr(Math.round(leavePenaltyMmr(rating.getLeaveCount()) * 10.0) / 10.0)
+                .build();
+    }
+
+    public PublicUserProfileDto getPublicProfile(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        PlayerRating rating = getOrCreateRating(userId);
+        return toPublicProfile(user, rating);
+    }
+
+    /** Tier badge for in-game display; null if still in placement. */
+    public String tierBadgeForUser(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        PlayerRating rating = getOrCreateRating(userId);
+        return TierUtil.tierBadge(rating.getPlacementGames(), rating.getRating());
     }
 
     @Transactional
@@ -146,6 +192,67 @@ public class RatingService {
         return deltas;
     }
 
+    /**
+     * Ranked forfeit: only the leaver loses MMR (2^n × base); remaining players unchanged.
+     */
+    @Transactional
+    public Map<String, RatingDeltaDto> processRankedForfeit(GameRecord record, Player forfeiter,
+                                                             List<Player> allPlayers) {
+        if (forfeiter.getUserId() == null) {
+            log.warn("Forfeit in ranked game {} had no authenticated forfeiter — skipping rating", record.getId());
+            return Collections.emptyMap();
+        }
+
+        PlayerRating pr = getOrCreateRating(forfeiter.getUserId());
+        double beforeRating = pr.getRating();
+        int n = pr.getLeaveCount();
+        double penalty = leavePenaltyMmr(n);
+        double afterRating = Math.max(0, beforeRating - penalty);
+        double delta = afterRating - beforeRating;
+
+        pr.setRating(afterRating);
+        pr.setLeaveCount(n + 1);
+        pr.setGamesPlayed(pr.getGamesPlayed() + 1);
+        pr.setPlacementGames(pr.getPlacementGames() + 1);
+        pr.setUpdatedAt(Instant.now());
+        playerRatingRepository.save(pr);
+
+        log.info("Ranked forfeit penalty userId={} leaveCount={} penalty={} rating {} -> {}",
+                forfeiter.getUserId(), n, penalty, beforeRating, afterRating);
+
+        RatingHistory history = new RatingHistory();
+        history.setUserId(forfeiter.getUserId());
+        history.setSeasonId(TierUtil.CURRENT_SEASON_ID);
+        history.setGameRecordId(record.getId());
+        history.setRatingBefore(beforeRating);
+        history.setRatingAfter(afterRating);
+        history.setRatingDelta(delta);
+        ratingHistoryRepository.save(history);
+
+        GameRecordPlayer grp = new GameRecordPlayer();
+        grp.setGameRecordId(record.getId());
+        grp.setUserId(forfeiter.getUserId());
+        grp.setUsername(forfeiter.getUsername());
+        grp.setScore(0);
+        grp.setRatingBefore(beforeRating);
+        grp.setRatingAfter(afterRating);
+        grp.setRatingDelta(delta);
+        gameRecordPlayerRepository.save(grp);
+
+        Map<String, RatingDeltaDto> deltas = new LinkedHashMap<>();
+        deltas.put(forfeiter.getId(), RatingDeltaDto.builder()
+                .userId(forfeiter.getUserId())
+                .username(forfeiter.getUsername())
+                .ratingBefore(Math.round(beforeRating * 10.0) / 10.0)
+                .ratingAfter(Math.round(afterRating * 10.0) / 10.0)
+                .ratingDelta(Math.round(delta * 10.0) / 10.0)
+                .tier(TierUtil.tierBadge(pr.getPlacementGames(), afterRating))
+                .placementComplete(TierUtil.isPlacementComplete(pr.getPlacementGames()))
+                .placementGames(pr.getPlacementGames())
+                .build());
+        return deltas;
+    }
+
     public List<LeaderboardEntryDto> getLeaderboard(int limit) {
         int capped = Math.min(Math.max(limit, 1), 100);
         List<PlayerRating> ratings = playerRatingRepository.findBySeasonIdOrderByRatingDesc(
@@ -178,6 +285,33 @@ public class RatingService {
                     Instant playedAt = gr != null
                             ? gr.getPlayedAt().toInstant(ZoneOffset.UTC)
                             : Instant.now();
+                    List<OpponentScoreDto> opponents = Collections.emptyList();
+                    int placement = 1;
+                    if (gr != null) {
+                        try {
+                            Map<String, Integer> scores = objectMapper.readValue(
+                                    gr.getPlayerScoresJson(),
+                                    new TypeReference<Map<String, Integer>>() {});
+                            List<Map.Entry<String, Integer>> sorted = scores.entrySet().stream()
+                                    .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
+                                    .collect(Collectors.toList());
+                            for (int i = 0; i < sorted.size(); i++) {
+                                if (sorted.get(i).getKey().equals(grp.getUsername())) {
+                                    placement = i + 1;
+                                    break;
+                                }
+                            }
+                            opponents = sorted.stream()
+                                    .filter(e -> !e.getKey().equals(grp.getUsername()))
+                                    .map(e -> OpponentScoreDto.builder()
+                                            .username(e.getKey())
+                                            .score(e.getValue())
+                                            .build())
+                                    .collect(Collectors.toList());
+                        } catch (Exception e) {
+                            log.warn("Failed to parse scores for game {}", gr.getId(), e);
+                        }
+                    }
                     return MatchHistoryEntryDto.builder()
                             .gameRecordId(grp.getGameRecordId())
                             .roomCode(gr != null ? gr.getRoomCode() : "")
@@ -187,6 +321,13 @@ public class RatingService {
                             .ratingAfter(grp.getRatingAfter())
                             .ratingDelta(grp.getRatingDelta())
                             .playedAt(playedAt)
+                            .ranked(gr != null && gr.isRanked())
+                            .maxRounds(gr != null ? gr.getMaxRounds() : 0)
+                            .playerCount(gr != null ? gr.getPlayerCount() : 0)
+                            .placement(placement)
+                            .winnerUsername(gr != null ? gr.getWinnerUsername() : null)
+                            .winnerScore(gr != null ? gr.getWinnerScore() : 0)
+                            .opponents(opponents)
                             .build();
                 })
                 .collect(Collectors.toList());

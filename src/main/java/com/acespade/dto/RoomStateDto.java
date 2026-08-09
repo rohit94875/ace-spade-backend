@@ -30,4 +30,7 @@ public class RoomStateDto {
     private String pausedByPlayerId;
     private List<ChatMessageDto> chatMessages;
     private Map<String, PlayerPresenceDto> presence;
+    private List<SpectatorDto> spectators;
+    /** targetPlayerId -> list of voter playerIds */
+    private Map<String, List<String>> botVotes;
 }
