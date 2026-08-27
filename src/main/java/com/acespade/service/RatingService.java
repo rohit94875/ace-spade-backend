@@ -44,6 +44,23 @@ public class RatingService {
         return Math.pow(2, leaveCount) * forfeitBaseMmr;
     }
 
+    /** Same game score → same rank (draw); Glicko treats equal ranks as 0.5 vs each other. */
+    static List<Integer> competitionRanks(List<Player> sortedByScoreDesc, Map<String, Integer> scores) {
+        List<Integer> ranks = new ArrayList<>(sortedByScoreDesc.size());
+        int rank = 1;
+        for (int i = 0; i < sortedByScoreDesc.size(); i++) {
+            if (i > 0) {
+                int prev = scores.getOrDefault(sortedByScoreDesc.get(i - 1).getId(), 0);
+                int curr = scores.getOrDefault(sortedByScoreDesc.get(i).getId(), 0);
+                if (curr < prev) {
+                    rank = i + 1;
+                }
+            }
+            ranks.add(rank);
+        }
+        return ranks;
+    }
+
     public PlayerRating getOrCreateRating(Long userId) {
         return playerRatingRepository.findByUserIdAndSeasonId(userId, TierUtil.CURRENT_SEASON_ID)
                 .orElseGet(() -> {
@@ -127,14 +144,13 @@ public class RatingService {
 
         List<GlickoRating> before = new ArrayList<>();
         List<PlayerRating> ratingEntities = new ArrayList<>();
-        List<Integer> ranks = new ArrayList<>();
+        List<Integer> ranks = competitionRanks(rankedHumans, scores);
 
         for (int i = 0; i < rankedHumans.size(); i++) {
             Player p = rankedHumans.get(i);
             PlayerRating pr = getOrCreateRating(p.getUserId());
             before.add(new GlickoRating(pr.getRating(), pr.getRatingDeviation(), pr.getVolatility()));
             ratingEntities.add(pr);
-            ranks.add(i + 1);
         }
 
         List<GlickoRating> after = Glicko2Calculator.updateRatings(before, ranks);
