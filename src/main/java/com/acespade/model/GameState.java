@@ -66,6 +66,10 @@ public class GameState implements Serializable {
     @Builder.Default
     private Map<String, Integer> scores = new HashMap<>();
 
+    /** Clan Battle only: teamId ("1", "2") → cumulative team score. */
+    @Builder.Default
+    private Map<String, Integer> teamScores = new HashMap<>();
+
     /** Room option: play vs BOT Vitality from lobby (host + bot). */
     @Builder.Default
     private boolean playWithBot = false;

@@ -21,6 +21,14 @@ public class RoundEndedPayload {
     private Map<String, Integer> bids;
     /** playerId -> tricks won this round */
     private Map<String, Integer> tricksWon;
+    /** Clan Battle: teamId ("1","2") -> points earned this round */
+    private Map<String, Integer> teamRoundScores;
+    /** Clan Battle: teamId -> cumulative team score after this round */
+    private Map<String, Integer> teamCumulativeScores;
+    /** Clan Battle: teamId -> sum of teammate bids this round */
+    private Map<String, Integer> teamBids;
+    /** Clan Battle: teamId -> sum of teammate tricks won this round */
+    private Map<String, Integer> teamTricksWon;
     private boolean gameOver;
     /** Only present when gameOver=true */
     private String winnerUsername;
