@@ -42,6 +42,11 @@ public class SeasonController {
         return ResponseEntity.ok(seasonService.getAllMyRewards(user.getId()));
     }
 
+    @GetMapping("/rewards/users/{userId}")
+    public ResponseEntity<List<SeasonRewardsGroupDto>> userRewards(@PathVariable Long userId) {
+        return ResponseEntity.ok(seasonService.getUserRewards(userId));
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<?> detail(@PathVariable int id) {
         try {

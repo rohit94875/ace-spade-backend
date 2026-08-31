@@ -4,7 +4,9 @@ import com.acespade.domain.Season;
 import com.acespade.domain.SeasonReward;
 import com.acespade.dto.*;
 import com.acespade.model.enums.GameMode;
+import com.acespade.model.enums.RewardSymbolType;
 import com.acespade.model.enums.SeasonStatus;
+import com.acespade.rating.RewardSymbolUtil;
 import com.acespade.repository.SeasonRepository;
 import com.acespade.repository.SeasonRewardRepository;
 import com.acespade.repository.UserRepository;
@@ -169,6 +171,7 @@ public class SeasonService {
         Season season = seasonRepository.findById(seasonId)
                 .orElseThrow(() -> new IllegalArgumentException("Season not found"));
         List<SeasonRewardWinnerDto> winners = seasonRewardRepository.findBySeasonId(seasonId).stream()
+                .filter(r -> RewardSymbolUtil.isAwardBadge(r.getSymbolType()))
                 .map(r -> SeasonRewardWinnerDto.builder()
                         .symbolType(r.getSymbolType())
                         .userId(r.getUserId())
@@ -177,6 +180,7 @@ public class SeasonService {
                                 .orElse("Unknown"))
                         .statValue(r.getStatValue())
                         .build())
+                .sorted(Comparator.comparing(w -> RewardSymbolUtil.awardPrestigeRank(w.getSymbolType())))
                 .collect(Collectors.toList());
         return SeasonDetailDto.builder()
                 .seasonId(season.getId())
@@ -191,15 +195,14 @@ public class SeasonService {
     }
 
     public List<SeasonRewardDto> getMyRewards(int seasonId, Long userId) {
-        return seasonRewardRepository.findBySeasonIdAndUserId(seasonId, userId).stream()
-                .map(r -> SeasonRewardDto.builder()
-                        .symbolType(r.getSymbolType())
-                        .statValue(r.getStatValue())
-                        .build())
-                .collect(Collectors.toList());
+        return sortRewardDtos(seasonRewardRepository.findBySeasonIdAndUserId(seasonId, userId));
     }
 
     public List<SeasonRewardsGroupDto> getAllMyRewards(Long userId) {
+        return getUserRewards(userId);
+    }
+
+    public List<SeasonRewardsGroupDto> getUserRewards(Long userId) {
         Map<Integer, List<SeasonReward>> bySeason = seasonRewardRepository.findByUserIdOrderBySeasonIdDesc(userId)
                 .stream()
                 .collect(Collectors.groupingBy(SeasonReward::getSeasonId));
@@ -211,14 +214,54 @@ public class SeasonService {
                         .seasonName(s.getName())
                         .status(s.getStatus())
                         .rewardsTracked(s.isRewardsTracked())
-                        .rewards(bySeason.getOrDefault(s.getId(), Collections.emptyList()).stream()
-                                .map(r -> SeasonRewardDto.builder()
-                                        .symbolType(r.getSymbolType())
-                                        .statValue(r.getStatValue())
-                                        .build())
-                                .collect(Collectors.toList()))
+                        .rewards(sortRewardDtos(bySeason.getOrDefault(s.getId(), Collections.emptyList())))
                         .build())
                 .collect(Collectors.toList());
+    }
+
+    private List<SeasonRewardDto> sortRewardDtos(List<SeasonReward> rewards) {
+        return rewards.stream()
+                .map(r -> SeasonRewardDto.builder()
+                        .symbolType(r.getSymbolType())
+                        .statValue(r.getStatValue())
+                        .build())
+                .sorted(Comparator
+                        .comparingInt((SeasonRewardDto r) -> rewardSortGroup(r.getSymbolType()))
+                        .thenComparingInt(r -> rewardSortRank(r.getSymbolType())))
+                .collect(Collectors.toList());
+    }
+
+    private static int rewardSortGroup(RewardSymbolType type) {
+        if (RewardSymbolUtil.isAwardBadge(type)) {
+            return 0;
+        }
+        if (RewardSymbolUtil.isTierCard(type)) {
+            return 1;
+        }
+        return 2;
+    }
+
+    private static int rewardSortRank(RewardSymbolType type) {
+        if (RewardSymbolUtil.isAwardBadge(type)) {
+            return RewardSymbolUtil.awardPrestigeRank(type);
+        }
+        if (RewardSymbolUtil.isTierCard(type)) {
+            return tierCardPrestigeRank(type);
+        }
+        return 99;
+    }
+
+    private static int tierCardPrestigeRank(RewardSymbolType type) {
+        switch (type) {
+            case ACE_CARD: return 0;
+            case DIAMOND_CARD: return 1;
+            case PLATINUM_CARD: return 2;
+            case GOLD_CARD: return 3;
+            case SILVER_CARD: return 4;
+            case BRONZE_CARD: return 5;
+            case SAND_CARD: return 6;
+            default: return 99;
+        }
     }
 
     private CurrentSeasonDto toCurrentDto(Season season) {
