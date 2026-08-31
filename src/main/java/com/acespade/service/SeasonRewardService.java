@@ -1,0 +1,135 @@
+package com.acespade.service;
+
+import com.acespade.domain.PlayerRating;
+import com.acespade.domain.SeasonPlayerStats;
+import com.acespade.domain.SeasonReward;
+import com.acespade.model.enums.GameMode;
+import com.acespade.model.enums.RewardSymbolType;
+import com.acespade.repository.PlayerRatingRepository;
+import com.acespade.repository.SeasonPlayerStatsRepository;
+import com.acespade.repository.SeasonRewardRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Comparator;
+import java.util.List;
+import java.util.Optional;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class SeasonRewardService {
+
+    private final SeasonPlayerStatsRepository statsRepository;
+    private final SeasonRewardRepository rewardRepository;
+    private final PlayerRatingRepository playerRatingRepository;
+
+    @Transactional
+    public void recordRankedClassicResult(int seasonId, Long userId, boolean won, double mmrAfter) {
+        SeasonPlayerStats stats = statsRepository
+                .findBySeasonIdAndUserIdAndGameMode(seasonId, userId, GameMode.CLASSIC)
+                .orElseGet(() -> {
+                    SeasonPlayerStats s = new SeasonPlayerStats();
+                    s.setSeasonId(seasonId);
+                    s.setUserId(userId);
+                    s.setGameMode(GameMode.CLASSIC);
+                    return s;
+                });
+        stats.setMatchesPlayed(stats.getMatchesPlayed() + 1);
+        if (won) {
+            stats.setWins(stats.getWins() + 1);
+            stats.setWinStreak(stats.getWinStreak() + 1);
+            stats.setLossStreak(0);
+            stats.setFinishes(stats.getFinishes() + 1);
+            stats.setMaxWinStreak(Math.max(stats.getMaxWinStreak(), stats.getWinStreak()));
+        } else {
+            stats.setLosses(stats.getLosses() + 1);
+            stats.setLossStreak(stats.getLossStreak() + 1);
+            stats.setWinStreak(0);
+            stats.setMaxLossStreak(Math.max(stats.getMaxLossStreak(), stats.getLossStreak()));
+        }
+        stats.setPeakMmr(Math.max(stats.getPeakMmr(), mmrAfter));
+        statsRepository.save(stats);
+    }
+
+    @Transactional
+    public void computeAndPersistRewards(int seasonId) {
+        if (rewardRepository.findBySeasonId(seasonId).stream().findAny().isPresent()) {
+            return;
+        }
+        List<SeasonPlayerStats> stats = statsRepository.findBySeasonIdAndGameMode(seasonId, GameMode.CLASSIC);
+        for (SeasonPlayerStats s : stats) {
+            RewardSymbolType tierCard = tierCardForMmr(s.getPeakMmr());
+            if (tierCard != null) {
+                saveReward(seasonId, s.getUserId(), tierCard, s.getPeakMmr());
+            }
+        }
+        awardTop(seasonId, stats, RewardSymbolType.MOST_MATCHES,
+                Comparator.comparingInt(SeasonPlayerStats::getMatchesPlayed));
+        awardTop(seasonId, stats, RewardSymbolType.MOST_WINS,
+                Comparator.comparingInt(SeasonPlayerStats::getWins));
+        awardTop(seasonId, stats, RewardSymbolType.MOST_LOSSES,
+                Comparator.comparingInt(SeasonPlayerStats::getLosses));
+        awardTop(seasonId, stats, RewardSymbolType.WIN_STREAK,
+                Comparator.comparingInt(SeasonPlayerStats::getMaxWinStreak));
+        awardTop(seasonId, stats, RewardSymbolType.LOSS_STREAK,
+                Comparator.comparingInt(SeasonPlayerStats::getMaxLossStreak));
+        awardTop(seasonId, stats, RewardSymbolType.FINISHER,
+                Comparator.comparingInt(SeasonPlayerStats::getFinishes));
+
+        List<PlayerRating> ratings = playerRatingRepository.findBySeasonIdAndGameModeOrderByRatingDesc(
+                seasonId, GameMode.CLASSIC.name(), PageRequest.of(0, 1));
+        if (!ratings.isEmpty()) {
+            PlayerRating top = ratings.get(0);
+            saveReward(seasonId, top.getUserId(), RewardSymbolType.TOP_MMR, top.getRating());
+        }
+        log.info("operation=computeAndPersistRewards feature=season-rewards seasonId={} status=exit", seasonId);
+    }
+
+    private void awardTop(int seasonId, List<SeasonPlayerStats> stats, RewardSymbolType symbol,
+                          Comparator<SeasonPlayerStats> comparator) {
+        Optional<SeasonPlayerStats> top = stats.stream()
+                .filter(s -> statValueFor(symbol, s) > 0)
+                .max(comparator);
+        top.ifPresent(s -> {
+            double value = statValueFor(symbol, s);
+            if (value > 0) {
+                saveReward(seasonId, s.getUserId(), symbol, value);
+            }
+        });
+    }
+
+    private double statValueFor(RewardSymbolType symbol, SeasonPlayerStats s) {
+        switch (symbol) {
+            case MOST_MATCHES: return s.getMatchesPlayed();
+            case MOST_WINS: return s.getWins();
+            case MOST_LOSSES: return s.getLosses();
+            case WIN_STREAK: return s.getMaxWinStreak();
+            case LOSS_STREAK: return s.getMaxLossStreak();
+            case FINISHER: return s.getFinishes();
+            default: return 0;
+        }
+    }
+
+    private void saveReward(int seasonId, Long userId, RewardSymbolType symbol, double value) {
+        SeasonReward reward = new SeasonReward();
+        reward.setSeasonId(seasonId);
+        reward.setUserId(userId);
+        reward.setSymbolType(symbol);
+        reward.setStatValue(value);
+        rewardRepository.save(reward);
+    }
+
+    static RewardSymbolType tierCardForMmr(double mmr) {
+        if (mmr < 1100) return RewardSymbolType.SAND_CARD;
+        if (mmr < 1250) return RewardSymbolType.BRONZE_CARD;
+        if (mmr < 1400) return RewardSymbolType.SILVER_CARD;
+        if (mmr < 1550) return RewardSymbolType.GOLD_CARD;
+        if (mmr < 1700) return RewardSymbolType.PLATINUM_CARD;
+        if (mmr < 1850) return RewardSymbolType.DIAMOND_CARD;
+        return RewardSymbolType.ACE_CARD;
+    }
+}

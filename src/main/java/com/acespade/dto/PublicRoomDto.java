@@ -18,4 +18,5 @@ public class PublicRoomDto {
     private boolean spectatable;
     private String phase;
     private int spectatorCount;
+    private String gameMode;
 }

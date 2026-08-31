@@ -1,6 +1,7 @@
 package com.acespade.service;
 
 import com.acespade.model.*;
+import com.acespade.model.enums.GameMode;
 import com.acespade.rating.TierUtil;
 import com.acespade.model.enums.GamePhase;
 import com.acespade.model.enums.Rank;
@@ -213,11 +214,8 @@ public class GameEngine {
     }
 
     private GameState endRound(GameState state) {
-        // Calculate scores
         for (Player player : state.getPlayers()) {
-            int roundScore = (player.getBid() != null && player.getTricksWon() == player.getBid())
-                    ? calculateRoundScore(player.getBid())
-                    : 0;
+            int roundScore = calculateRoundScore(state, player);
             state.getScores().merge(player.getId(), roundScore, Integer::sum);
         }
 
@@ -234,12 +232,41 @@ public class GameEngine {
     }
 
     /**
-     * Scoring formula:
+     * Classic scoring formula:
      *   bid == 0 → 10 pts
      *   bid N   → 10 + (N * 11) pts
      */
-    public int calculateRoundScore(int bid) {
+    public int calculateClassicRoundScore(int bid) {
         return bid == 0 ? 10 : 10 + (bid * 11);
+    }
+
+    /** @deprecated use {@link #calculateClassicRoundScore(int)} */
+    public int calculateRoundScore(int bid) {
+        return calculateClassicRoundScore(bid);
+    }
+
+    public int calculateRoundScore(GameState state, Player player) {
+        if (player.getBid() == null) {
+            return 0;
+        }
+        if (GameMode.RUTHLESS_HIDDEN.name().equals(state.getGameMode())) {
+            return calculateRuthlessRoundScore(player);
+        }
+        if (player.getTricksWon() == player.getBid()) {
+            return calculateClassicRoundScore(player.getBid());
+        }
+        return 0;
+    }
+
+    /**
+     * Ruthless: exact bid uses classic points; miss is the negative of the hit value
+     * (e.g. bid 1 → +21 if exact, -21 if missed).
+     */
+    public int calculateRuthlessRoundScore(Player player) {
+        int bid = player.getBid();
+        int won = player.getTricksWon();
+        int hitValue = calculateClassicRoundScore(bid);
+        return won == bid ? hitValue : -hitValue;
     }
 
     private List<Card> createShuffledDoubleDeck() {
@@ -280,9 +307,7 @@ public class GameEngine {
     public Map<String, Integer> getRoundScores(GameState state) {
         return state.getPlayers().stream().collect(Collectors.toMap(
                 Player::getId,
-                p -> (p.getBid() != null && p.getTricksWon() == p.getBid().intValue())
-                        ? calculateRoundScore(p.getBid())
-                        : 0
+                p -> calculateRoundScore(state, p)
         ));
     }
 

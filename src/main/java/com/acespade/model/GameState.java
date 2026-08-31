@@ -82,6 +82,15 @@ public class GameState implements Serializable {
     @Builder.Default
     private DisconnectPolicy disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
 
+    @Builder.Default
+    private String gameMode = "CLASSIC";
+
+    @Builder.Default
+    private String team1Name = "Blue Clan";
+
+    @Builder.Default
+    private String team2Name = "Red Clan";
+
     /** Solo bot games only: game frozen until human resumes. */
     @Builder.Default
     private boolean paused = false;
