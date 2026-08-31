@@ -195,7 +195,7 @@ public class RatingService {
                     .build());
 
             final int playerRank = ranks.get(i);
-            seasonService.getActiveOrGraceSeason().ifPresent(season -> {
+            seasonService.getActiveSeason().ifPresent(season -> {
                 if (season.isRewardsTracked()) {
                     boolean won = playerRank == 1;
                     seasonRewardService.recordRankedClassicResult(season.getId(), p.getUserId(), won, afterRating);

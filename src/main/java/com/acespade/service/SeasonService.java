@@ -45,11 +45,11 @@ public class SeasonService {
             legacy.setRewardsTracked(true);
             ZonedDateTime legacyStart = ZonedDateTime.of(2026, 1, 1, 0, 0, 0, 0, IST);
             legacy.setStartsAt(legacyStart.toInstant());
-            // Ends tonight at midnight IST (Aug 31 → Sep 1)
             legacy.setEndsAt(ZonedDateTime.of(2026, 8, 31, 23, 59, 59, 999_000_000, IST).toInstant());
-            legacy.setGraceEndsAt(ZonedDateTime.of(2026, 9, 1, 23, 59, 59, 999_000_000, IST).toInstant());
-            legacy.setStatus(resolveStatusFromTimeline(legacy.getStartsAt(), legacy.getEndsAt(), legacy.getGraceEndsAt()));
+            legacy.setGraceEndsAt(legacy.getEndsAt());
+            legacy.setStatus(SeasonStatus.COMPLETED);
             seasonRepository.save(legacy);
+            completeSeason(legacy);
             log.info("operation=bootstrapSeasons feature=season-service status=exit seeded legacy season 1");
         }
         ensureCalendarSeasons();
@@ -68,16 +68,8 @@ public class SeasonService {
                 log.info("operation=runSeasonTransitions feature=season-service seasonId={} status=ACTIVE", season.getId());
             }
         }
-        for (Season season : seasons) {
+        for (Season season : seasonRepository.findAll()) {
             if (season.getStatus() == SeasonStatus.ACTIVE && now.isAfter(season.getEndsAt())) {
-                season.setStatus(SeasonStatus.GRACE);
-                seasonRepository.save(season);
-                log.info("operation=runSeasonTransitions feature=season-service seasonId={} status=GRACE", season.getId());
-            }
-        }
-        seasons = seasonRepository.findAll();
-        for (Season season : seasons) {
-            if (season.getStatus() == SeasonStatus.GRACE && now.isAfter(season.getGraceEndsAt())) {
                 completeSeason(season);
             }
         }
@@ -89,11 +81,11 @@ public class SeasonService {
             seasonRewardService.finalizeSeasonRewards(season.getId());
         }
         season.setStatus(SeasonStatus.COMPLETED);
+        season.setGraceEndsAt(season.getEndsAt());
         seasonRepository.save(season);
         log.info("operation=completeSeason feature=season-service seasonId={} status=COMPLETED", season.getId());
     }
 
-    /** Backfill stats (if needed) and compute awards for a completed or grace-ending season. */
     @Transactional
     public void finalizeSeasonRewards(int seasonId) {
         seasonRewardService.finalizeSeasonRewards(seasonId);
@@ -124,35 +116,40 @@ public class SeasonService {
         season.setName("Season " + nextId + " — " + monthName + " " + ym.getYear());
         season.setStartsAt(startsAt);
         season.setEndsAt(ym.atEndOfMonth().atTime(23, 59, 59, 999_000_000).atZone(IST).toInstant());
-        season.setGraceEndsAt(ym.plusMonths(1).atDay(1).atTime(23, 59, 59, 999_000_000).atZone(IST).toInstant());
+        season.setGraceEndsAt(season.getEndsAt());
         season.setRewardsTracked(true);
         Instant now = Instant.now();
         if (now.isBefore(startsAt)) {
             season.setStatus(SeasonStatus.SCHEDULED);
-        } else if (now.isAfter(season.getGraceEndsAt())) {
-            season.setStatus(SeasonStatus.COMPLETED);
         } else if (now.isAfter(season.getEndsAt())) {
-            season.setStatus(SeasonStatus.GRACE);
+            season.setStatus(SeasonStatus.COMPLETED);
         } else {
             season.setStatus(SeasonStatus.ACTIVE);
         }
         seasonRepository.save(season);
+        if (season.getStatus() == SeasonStatus.COMPLETED && season.isRewardsTracked()) {
+            completeSeason(season);
+        }
         log.info("operation=ensureMonthSeason feature=season-service seasonId={} month={}", season.getId(), ym);
     }
 
-    public Optional<Season> getActiveOrGraceSeason() {
+    public Optional<Season> getActiveSeason() {
         return seasonRepository.findFirstByStatusInOrderByIdDesc(
-                Arrays.asList(SeasonStatus.ACTIVE, SeasonStatus.GRACE));
+                Collections.singletonList(SeasonStatus.ACTIVE));
     }
 
     public int getRankedSeasonId() {
-        return getActiveOrGraceSeason()
+        return getActiveSeason()
                 .map(Season::getId)
-                .orElse(1);
+                .orElseGet(() -> seasonRepository.findAllByOrderByIdDesc().stream()
+                        .filter(s -> s.getStatus() == SeasonStatus.ACTIVE)
+                        .map(Season::getId)
+                        .findFirst()
+                        .orElse(1));
     }
 
     public CurrentSeasonDto getCurrentSeasonDto() {
-        Season season = getActiveOrGraceSeason()
+        Season season = getActiveSeason()
                 .orElseGet(() -> seasonRepository.findAll().stream()
                         .filter(s -> s.getStatus() == SeasonStatus.SCHEDULED)
                         .min(Comparator.comparing(Season::getStartsAt))
@@ -185,10 +182,10 @@ public class SeasonService {
         return SeasonDetailDto.builder()
                 .seasonId(season.getId())
                 .name(season.getName())
-                .status(season.getStatus())
+                .status(normalizeStatus(season.getStatus()))
                 .startsAt(toIstOffset(season.getStartsAt()))
                 .endsAt(toIstOffset(season.getEndsAt()))
-                .graceEndsAt(toIstOffset(season.getGraceEndsAt()))
+                .graceEndsAt(toIstOffset(season.getEndsAt()))
                 .rewardsTracked(season.isRewardsTracked())
                 .awardWinners(winners)
                 .build();
@@ -212,7 +209,7 @@ public class SeasonService {
                 .map(s -> SeasonRewardsGroupDto.builder()
                         .seasonId(s.getId())
                         .seasonName(s.getName())
-                        .status(s.getStatus())
+                        .status(normalizeStatus(s.getStatus()))
                         .rewardsTracked(s.isRewardsTracked())
                         .rewards(sortRewardDtos(bySeason.getOrDefault(s.getId(), Collections.emptyList())))
                         .build())
@@ -266,16 +263,8 @@ public class SeasonService {
 
     private CurrentSeasonDto toCurrentDto(Season season) {
         Instant now = Instant.now();
-        boolean inGrace = season.getStatus() == SeasonStatus.GRACE;
         boolean scheduled = season.getStatus() == SeasonStatus.SCHEDULED;
-        Instant countdownTarget;
-        if (inGrace) {
-            countdownTarget = season.getGraceEndsAt();
-        } else if (scheduled) {
-            countdownTarget = season.getStartsAt();
-        } else {
-            countdownTarget = season.getEndsAt();
-        }
+        Instant countdownTarget = scheduled ? season.getStartsAt() : season.getEndsAt();
         long secondsRemaining = Math.max(0, ChronoUnit.SECONDS.between(now, countdownTarget));
         boolean showCountdown = false;
         String countdownMessage = null;
@@ -285,9 +274,6 @@ public class SeasonService {
             countdownMessage = showCountdown
                     ? "Season ends soon — finish your ranked games!"
                     : "Ranked classic games count toward this season's rewards.";
-        } else if (inGrace) {
-            showCountdown = true;
-            countdownMessage = "Grace period — final games still count toward this season";
         } else if (scheduled) {
             long hoursUntilStart = ChronoUnit.HOURS.between(now, season.getStartsAt());
             showCountdown = hoursUntilStart >= 0 && hoursUntilStart <= COUNTDOWN_DAYS * 24L;
@@ -296,10 +282,10 @@ public class SeasonService {
         return CurrentSeasonDto.builder()
                 .seasonId(season.getId())
                 .name(season.getName())
-                .status(season.getStatus())
+                .status(normalizeStatus(season.getStatus()))
                 .startsAt(toIstOffset(season.getStartsAt()))
                 .endsAt(toIstOffset(season.getEndsAt()))
-                .graceEndsAt(toIstOffset(season.getGraceEndsAt()))
+                .graceEndsAt(toIstOffset(season.getEndsAt()))
                 .rewardsTracked(season.isRewardsTracked())
                 .showCountdown(showCountdown)
                 .secondsRemaining(secondsRemaining)
@@ -311,7 +297,7 @@ public class SeasonService {
         return SeasonSummaryDto.builder()
                 .seasonId(season.getId())
                 .name(season.getName())
-                .status(season.getStatus())
+                .status(normalizeStatus(season.getStatus()))
                 .startsAt(toIstOffset(season.getStartsAt()))
                 .endsAt(toIstOffset(season.getEndsAt()))
                 .rewardsTracked(season.isRewardsTracked())
@@ -325,8 +311,13 @@ public class SeasonService {
     private void repairSeasonStatuses() {
         Instant now = Instant.now();
         for (Season season : seasonRepository.findAll()) {
-            SeasonStatus resolved = resolveStatusFromTimeline(
-                    season.getStartsAt(), season.getEndsAt(), season.getGraceEndsAt());
+            season.setGraceEndsAt(season.getEndsAt());
+            if (season.getStatus() == SeasonStatus.GRACE
+                    || (season.getStatus() == SeasonStatus.ACTIVE && now.isAfter(season.getEndsAt()))) {
+                completeSeason(season);
+                continue;
+            }
+            SeasonStatus resolved = resolveStatusFromTimeline(season.getStartsAt(), season.getEndsAt());
             if (season.getStatus() != resolved) {
                 season.setStatus(resolved);
                 seasonRepository.save(season);
@@ -336,17 +327,19 @@ public class SeasonService {
         }
     }
 
-    private static SeasonStatus resolveStatusFromTimeline(Instant startsAt, Instant endsAt, Instant graceEndsAt) {
+    private static SeasonStatus resolveStatusFromTimeline(Instant startsAt, Instant endsAt) {
         Instant now = Instant.now();
         if (now.isBefore(startsAt)) {
             return SeasonStatus.SCHEDULED;
         }
-        if (now.isAfter(graceEndsAt)) {
+        if (now.isAfter(endsAt)) {
             return SeasonStatus.COMPLETED;
         }
-        if (now.isAfter(endsAt)) {
-            return SeasonStatus.GRACE;
-        }
         return SeasonStatus.ACTIVE;
+    }
+
+    /** Legacy DB rows may still have GRACE — expose as COMPLETED to clients. */
+    private static SeasonStatus normalizeStatus(SeasonStatus status) {
+        return status == SeasonStatus.GRACE ? SeasonStatus.COMPLETED : status;
     }
 }

@@ -177,14 +177,27 @@ public class SeasonRewardService {
                 .orElse(stats.getFinalMmr());
     }
 
-    /** Tier card = rank family at season end (matches TierUtil families, not sub-divisions). */
+    /** Tier card matches badge family (Gold 3 at 1546 → Gold Card, not Silver). */
     static RewardSymbolType tierCardForMmr(double mmr) {
-        if (mmr < 1250) return RewardSymbolType.SAND_CARD;
-        if (mmr < 1400) return RewardSymbolType.BRONZE_CARD;
-        if (mmr < 1550) return RewardSymbolType.SILVER_CARD;
-        if (mmr < 1650) return RewardSymbolType.GOLD_CARD;
-        if (mmr < 1800) return RewardSymbolType.PLATINUM_CARD;
-        if (mmr < 1950) return RewardSymbolType.DIAMOND_CARD;
+        String tier = TierUtil.tierForMmr(mmr);
+        if (tier.startsWith("Please") || tier.startsWith("Sand")) {
+            return RewardSymbolType.SAND_CARD;
+        }
+        if (tier.startsWith("Bronze")) {
+            return RewardSymbolType.BRONZE_CARD;
+        }
+        if (tier.startsWith("Silver")) {
+            return RewardSymbolType.SILVER_CARD;
+        }
+        if (tier.startsWith("Gold")) {
+            return RewardSymbolType.GOLD_CARD;
+        }
+        if (tier.startsWith("Platinum")) {
+            return RewardSymbolType.PLATINUM_CARD;
+        }
+        if (tier.startsWith("Diamond")) {
+            return RewardSymbolType.DIAMOND_CARD;
+        }
         return RewardSymbolType.ACE_CARD;
     }
 
