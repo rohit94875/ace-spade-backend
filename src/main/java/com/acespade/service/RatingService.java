@@ -194,12 +194,13 @@ public class RatingService {
                     .placementGames(pr.getPlacementGames())
                     .build());
 
-            if (seasonService.getActiveOrGraceSeason()
-                    .filter(s -> s.isRewardsTracked())
-                    .isPresent()) {
-                boolean won = ranks.get(i) == 1;
-                seasonRewardService.recordRankedClassicResult(pr.getSeasonId(), p.getUserId(), won, afterRating);
-            }
+            final int playerRank = ranks.get(i);
+            seasonService.getActiveOrGraceSeason().ifPresent(season -> {
+                if (season.isRewardsTracked()) {
+                    boolean won = playerRank == 1;
+                    seasonRewardService.recordRankedClassicResult(season.getId(), p.getUserId(), won, afterRating);
+                }
+            });
         }
 
         return deltas;

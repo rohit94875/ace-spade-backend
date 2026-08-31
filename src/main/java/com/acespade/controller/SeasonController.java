@@ -21,6 +21,9 @@ public class SeasonController {
     private final SeasonService seasonService;
     private final RatingService ratingService;
 
+    @org.springframework.beans.factory.annotation.Value("${ace.season.ops-token:}")
+    private String seasonOpsToken;
+
     @GetMapping("/current")
     public ResponseEntity<CurrentSeasonDto> current() {
         return ResponseEntity.ok(seasonService.getCurrentSeasonDto());
@@ -55,6 +58,38 @@ public class SeasonController {
             return ResponseEntity.status(401).body(errorBody("Login required"));
         }
         return ResponseEntity.ok(seasonService.getMyRewards(id, user.getId()));
+    }
+
+    /** Ops: advance season statuses (same as daily cron + boot). Header: X-Season-Ops-Token */
+    @PostMapping("/run-transitions")
+    public ResponseEntity<?> runTransitions(
+            @RequestHeader(value = "X-Season-Ops-Token", required = false) String token) {
+        if (!isOpsAuthorized(token)) {
+            return ResponseEntity.status(401).body(errorBody("Unauthorized"));
+        }
+        seasonService.runSeasonTransitions();
+        Map<String, String> body = new HashMap<>();
+        body.put("status", "ok");
+        return ResponseEntity.ok(body);
+    }
+
+    /** Ops: backfill stats + compute awards for a season. Header: X-Season-Ops-Token */
+    @PostMapping("/{id}/finalize-rewards")
+    public ResponseEntity<?> finalizeRewards(
+            @PathVariable int id,
+            @RequestHeader(value = "X-Season-Ops-Token", required = false) String token) {
+        if (!isOpsAuthorized(token)) {
+            return ResponseEntity.status(401).body(errorBody("Unauthorized"));
+        }
+        seasonService.finalizeSeasonRewards(id);
+        Map<String, String> body = new HashMap<>();
+        body.put("status", "ok");
+        body.put("seasonId", String.valueOf(id));
+        return ResponseEntity.ok(body);
+    }
+
+    private boolean isOpsAuthorized(String token) {
+        return seasonOpsToken != null && !seasonOpsToken.isEmpty() && seasonOpsToken.equals(token);
     }
 
     private Map<String, String> errorBody(String message) {

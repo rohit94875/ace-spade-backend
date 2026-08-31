@@ -9,4 +9,6 @@ import java.util.List;
 @Repository
 public interface GameRecordRepository extends JpaRepository<GameRecord, Long> {
     List<GameRecord> findByRoomCodeOrderByPlayedAtDesc(String roomCode);
+
+    List<GameRecord> findBySeasonIdAndRankedTrue(int seasonId);
 }

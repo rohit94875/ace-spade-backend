@@ -5,6 +5,10 @@ import com.acespade.domain.SeasonPlayerStats;
 import com.acespade.domain.SeasonReward;
 import com.acespade.model.enums.GameMode;
 import com.acespade.model.enums.RewardSymbolType;
+import com.acespade.domain.GameRecordPlayer;
+import com.acespade.model.GameRecord;
+import com.acespade.repository.GameRecordPlayerRepository;
+import com.acespade.repository.GameRecordRepository;
 import com.acespade.repository.PlayerRatingRepository;
 import com.acespade.repository.SeasonPlayerStatsRepository;
 import com.acespade.repository.SeasonRewardRepository;
@@ -26,6 +30,8 @@ public class SeasonRewardService {
     private final SeasonPlayerStatsRepository statsRepository;
     private final SeasonRewardRepository rewardRepository;
     private final PlayerRatingRepository playerRatingRepository;
+    private final GameRecordRepository gameRecordRepository;
+    private final GameRecordPlayerRepository gameRecordPlayerRepository;
 
     @Transactional
     public void recordRankedClassicResult(int seasonId, Long userId, boolean won, double mmrAfter) {
@@ -53,6 +59,39 @@ public class SeasonRewardService {
         }
         stats.setPeakMmr(Math.max(stats.getPeakMmr(), mmrAfter));
         statsRepository.save(stats);
+    }
+
+    @Transactional
+    public void finalizeSeasonRewards(int seasonId) {
+        backfillSeasonStatsIfNeeded(seasonId);
+        computeAndPersistRewards(seasonId);
+    }
+
+    /** Rebuild season_player_stats from ranked game_records when live tracking was off. */
+    @Transactional
+    public void backfillSeasonStatsIfNeeded(int seasonId) {
+        if (!statsRepository.findBySeasonIdAndGameMode(seasonId, GameMode.CLASSIC).isEmpty()) {
+            return;
+        }
+        List<GameRecord> games = gameRecordRepository.findBySeasonIdAndRankedTrue(seasonId);
+        if (games.isEmpty()) {
+            log.info("operation=backfillSeasonStats feature=season-rewards seasonId={} status=skip no ranked games",
+                    seasonId);
+            return;
+        }
+        for (GameRecord game : games) {
+            List<GameRecordPlayer> players = gameRecordPlayerRepository.findByGameRecordId(game.getId());
+            for (GameRecordPlayer grp : players) {
+                if (grp.getUserId() == null) {
+                    continue;
+                }
+                boolean won = grp.getUsername().equals(game.getWinnerUsername());
+                double mmrAfter = grp.getRatingAfter() != null ? grp.getRatingAfter() : 0;
+                recordRankedClassicResult(seasonId, grp.getUserId(), won, mmrAfter);
+            }
+        }
+        log.info("operation=backfillSeasonStats feature=season-rewards seasonId={} status=exit games={}",
+                seasonId, games.size());
     }
 
     @Transactional

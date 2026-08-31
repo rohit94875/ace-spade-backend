@@ -39,7 +39,7 @@ public class SeasonService {
         if (seasonRepository.count() == 0) {
             Season legacy = new Season();
             legacy.setName("Season 1 — Legacy");
-            legacy.setRewardsTracked(false);
+            legacy.setRewardsTracked(true);
             ZonedDateTime legacyStart = ZonedDateTime.of(2026, 1, 1, 0, 0, 0, 0, IST);
             legacy.setStartsAt(legacyStart.toInstant());
             // Ends tonight at midnight IST (Aug 31 → Sep 1)
@@ -83,11 +83,17 @@ public class SeasonService {
 
     private void completeSeason(Season season) {
         if (season.isRewardsTracked()) {
-            seasonRewardService.computeAndPersistRewards(season.getId());
+            seasonRewardService.finalizeSeasonRewards(season.getId());
         }
         season.setStatus(SeasonStatus.COMPLETED);
         seasonRepository.save(season);
         log.info("operation=completeSeason feature=season-service seasonId={} status=COMPLETED", season.getId());
+    }
+
+    /** Backfill stats (if needed) and compute awards for a completed or grace-ending season. */
+    @Transactional
+    public void finalizeSeasonRewards(int seasonId) {
+        seasonRewardService.finalizeSeasonRewards(seasonId);
     }
 
     private void ensureCalendarSeasons() {
@@ -210,7 +216,9 @@ public class SeasonService {
         if (season.getStatus() == SeasonStatus.ACTIVE) {
             long hoursUntilEnd = ChronoUnit.HOURS.between(now, season.getEndsAt());
             showCountdown = hoursUntilEnd >= 0 && hoursUntilEnd <= COUNTDOWN_DAYS * 24L;
-            countdownMessage = "Season ends tonight at midnight — finish your ranked games!";
+            countdownMessage = showCountdown
+                    ? "Season ends soon — finish your ranked games!"
+                    : "Ranked classic games count toward this season's rewards.";
         } else if (inGrace) {
             showCountdown = true;
             countdownMessage = "Grace period — final games still count toward this season";
