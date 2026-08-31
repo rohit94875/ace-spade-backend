@@ -3,6 +3,7 @@ package com.acespade.service;
 import com.acespade.domain.PlayerRating;
 import com.acespade.domain.SeasonPlayerStats;
 import com.acespade.domain.SeasonReward;
+import com.acespade.rating.TierUtil;
 import com.acespade.model.enums.GameMode;
 import com.acespade.model.enums.RewardSymbolType;
 import com.acespade.domain.GameRecordPlayer;
@@ -101,37 +102,43 @@ public class SeasonRewardService {
         }
         List<SeasonPlayerStats> stats = statsRepository.findBySeasonIdAndGameMode(seasonId, GameMode.CLASSIC);
         for (SeasonPlayerStats s : stats) {
+            if (!eligibleForRewards(s)) {
+                continue;
+            }
             RewardSymbolType tierCard = tierCardForMmr(s.getPeakMmr());
             if (tierCard != null) {
                 saveReward(seasonId, s.getUserId(), tierCard, s.getPeakMmr());
             }
         }
-        awardTop(seasonId, stats, RewardSymbolType.MOST_MATCHES,
+        List<SeasonPlayerStats> eligible = stats.stream()
+                .filter(SeasonRewardService::eligibleForRewards)
+                .collect(java.util.stream.Collectors.toList());
+        awardTop(seasonId, eligible, RewardSymbolType.MOST_MATCHES,
                 Comparator.comparingInt(SeasonPlayerStats::getMatchesPlayed));
-        awardTop(seasonId, stats, RewardSymbolType.MOST_WINS,
+        awardTop(seasonId, eligible, RewardSymbolType.MOST_WINS,
                 Comparator.comparingInt(SeasonPlayerStats::getWins));
-        awardTop(seasonId, stats, RewardSymbolType.MOST_LOSSES,
+        awardTop(seasonId, eligible, RewardSymbolType.MOST_LOSSES,
                 Comparator.comparingInt(SeasonPlayerStats::getLosses));
-        awardTop(seasonId, stats, RewardSymbolType.WIN_STREAK,
+        awardTop(seasonId, eligible, RewardSymbolType.WIN_STREAK,
                 Comparator.comparingInt(SeasonPlayerStats::getMaxWinStreak));
-        awardTop(seasonId, stats, RewardSymbolType.LOSS_STREAK,
+        awardTop(seasonId, eligible, RewardSymbolType.LOSS_STREAK,
                 Comparator.comparingInt(SeasonPlayerStats::getMaxLossStreak));
-        awardTop(seasonId, stats, RewardSymbolType.FINISHER,
+        awardTop(seasonId, eligible, RewardSymbolType.FINISHER,
                 Comparator.comparingInt(SeasonPlayerStats::getFinishes));
 
         List<PlayerRating> ratings = playerRatingRepository.findBySeasonIdAndGameModeOrderByRatingDesc(
-                seasonId, GameMode.CLASSIC.name(), PageRequest.of(0, 1));
-        if (!ratings.isEmpty()) {
-            PlayerRating top = ratings.get(0);
-            saveReward(seasonId, top.getUserId(), RewardSymbolType.TOP_MMR, top.getRating());
-        }
+                seasonId, GameMode.CLASSIC.name(), PageRequest.of(0, 50));
+        ratings.stream()
+                .filter(pr -> pr.getGamesPlayed() >= TierUtil.PLACEMENT_GAMES_REQUIRED)
+                .findFirst()
+                .ifPresent(top -> saveReward(seasonId, top.getUserId(), RewardSymbolType.TOP_MMR, top.getRating()));
         log.info("operation=computeAndPersistRewards feature=season-rewards seasonId={} status=exit", seasonId);
     }
 
     private void awardTop(int seasonId, List<SeasonPlayerStats> stats, RewardSymbolType symbol,
                           Comparator<SeasonPlayerStats> comparator) {
         Optional<SeasonPlayerStats> top = stats.stream()
-                .filter(s -> statValueFor(symbol, s) > 0)
+                .filter(s -> eligibleForRewards(s) && statValueFor(symbol, s) > 0)
                 .max(comparator);
         top.ifPresent(s -> {
             double value = statValueFor(symbol, s);
@@ -170,5 +177,13 @@ public class SeasonRewardService {
         if (mmr < 1700) return RewardSymbolType.PLATINUM_CARD;
         if (mmr < 1850) return RewardSymbolType.DIAMOND_CARD;
         return RewardSymbolType.ACE_CARD;
+    }
+
+    static boolean eligibleForRewards(SeasonPlayerStats stats) {
+        return stats != null && stats.getMatchesPlayed() >= TierUtil.PLACEMENT_GAMES_REQUIRED;
+    }
+
+    public static int minRankedGamesForRewards() {
+        return TierUtil.PLACEMENT_GAMES_REQUIRED;
     }
 }

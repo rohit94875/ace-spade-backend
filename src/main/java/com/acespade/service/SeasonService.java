@@ -1,6 +1,7 @@
 package com.acespade.service;
 
 import com.acespade.domain.Season;
+import com.acespade.domain.SeasonReward;
 import com.acespade.dto.*;
 import com.acespade.model.enums.GameMode;
 import com.acespade.model.enums.SeasonStatus;
@@ -194,6 +195,28 @@ public class SeasonService {
                 .map(r -> SeasonRewardDto.builder()
                         .symbolType(r.getSymbolType())
                         .statValue(r.getStatValue())
+                        .build())
+                .collect(Collectors.toList());
+    }
+
+    public List<SeasonRewardsGroupDto> getAllMyRewards(Long userId) {
+        Map<Integer, List<SeasonReward>> bySeason = seasonRewardRepository.findByUserIdOrderBySeasonIdDesc(userId)
+                .stream()
+                .collect(Collectors.groupingBy(SeasonReward::getSeasonId));
+
+        return seasonRepository.findAllByOrderByIdDesc().stream()
+                .filter(s -> bySeason.containsKey(s.getId()))
+                .map(s -> SeasonRewardsGroupDto.builder()
+                        .seasonId(s.getId())
+                        .seasonName(s.getName())
+                        .status(s.getStatus())
+                        .rewardsTracked(s.isRewardsTracked())
+                        .rewards(bySeason.getOrDefault(s.getId(), Collections.emptyList()).stream()
+                                .map(r -> SeasonRewardDto.builder()
+                                        .symbolType(r.getSymbolType())
+                                        .statValue(r.getStatValue())
+                                        .build())
+                                .collect(Collectors.toList()))
                         .build())
                 .collect(Collectors.toList());
     }

@@ -34,6 +34,14 @@ public class SeasonController {
         return ResponseEntity.ok(seasonService.listSeasons());
     }
 
+    @GetMapping("/rewards/me")
+    public ResponseEntity<?> allMyRewards(@AuthenticationPrincipal AuthUser user) {
+        if (user == null) {
+            return ResponseEntity.status(401).body(errorBody("Login required"));
+        }
+        return ResponseEntity.ok(seasonService.getAllMyRewards(user.getId()));
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<?> detail(@PathVariable int id) {
         try {

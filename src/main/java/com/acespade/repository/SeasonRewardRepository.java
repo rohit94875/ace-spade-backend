@@ -10,5 +10,6 @@ import java.util.Optional;
 public interface SeasonRewardRepository extends JpaRepository<SeasonReward, Long> {
     List<SeasonReward> findBySeasonIdAndUserId(int seasonId, Long userId);
     List<SeasonReward> findBySeasonId(int seasonId);
+    List<SeasonReward> findByUserIdOrderBySeasonIdDesc(Long userId);
     Optional<SeasonReward> findBySeasonIdAndSymbolType(int seasonId, RewardSymbolType symbolType);
 }
