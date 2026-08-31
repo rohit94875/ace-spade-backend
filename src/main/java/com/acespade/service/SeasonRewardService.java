@@ -58,7 +58,7 @@ public class SeasonRewardService {
             stats.setWinStreak(0);
             stats.setMaxLossStreak(Math.max(stats.getMaxLossStreak(), stats.getLossStreak()));
         }
-        stats.setPeakMmr(Math.max(stats.getPeakMmr(), mmrAfter));
+        stats.setFinalMmr(mmrAfter);
         statsRepository.save(stats);
     }
 
@@ -74,7 +74,7 @@ public class SeasonRewardService {
         if (!statsRepository.findBySeasonIdAndGameMode(seasonId, GameMode.CLASSIC).isEmpty()) {
             return;
         }
-        List<GameRecord> games = gameRecordRepository.findBySeasonIdAndRankedTrue(seasonId);
+        List<GameRecord> games = gameRecordRepository.findBySeasonIdAndRankedTrueOrderByPlayedAtAsc(seasonId);
         if (games.isEmpty()) {
             log.info("operation=backfillSeasonStats feature=season-rewards seasonId={} status=skip no ranked games",
                     seasonId);
@@ -105,9 +105,10 @@ public class SeasonRewardService {
             if (!eligibleForRewards(s)) {
                 continue;
             }
-            RewardSymbolType tierCard = tierCardForMmr(s.getPeakMmr());
+            double finalMmr = finalMmrForTierCard(seasonId, s);
+            RewardSymbolType tierCard = tierCardForMmr(finalMmr);
             if (tierCard != null) {
-                saveReward(seasonId, s.getUserId(), tierCard, s.getPeakMmr());
+                saveReward(seasonId, s.getUserId(), tierCard, finalMmr);
             }
         }
         List<SeasonPlayerStats> eligible = stats.stream()
@@ -167,6 +168,13 @@ public class SeasonRewardService {
         reward.setSymbolType(symbol);
         reward.setStatValue(value);
         rewardRepository.save(reward);
+    }
+
+    private double finalMmrForTierCard(int seasonId, SeasonPlayerStats stats) {
+        return playerRatingRepository
+                .findByUserIdAndSeasonIdAndGameMode(stats.getUserId(), seasonId, GameMode.CLASSIC.name())
+                .map(PlayerRating::getRating)
+                .orElse(stats.getFinalMmr());
     }
 
     static RewardSymbolType tierCardForMmr(double mmr) {

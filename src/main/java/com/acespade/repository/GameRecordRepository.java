@@ -11,4 +11,6 @@ public interface GameRecordRepository extends JpaRepository<GameRecord, Long> {
     List<GameRecord> findByRoomCodeOrderByPlayedAtDesc(String roomCode);
 
     List<GameRecord> findBySeasonIdAndRankedTrue(int seasonId);
+
+    List<GameRecord> findBySeasonIdAndRankedTrueOrderByPlayedAtAsc(int seasonId);
 }

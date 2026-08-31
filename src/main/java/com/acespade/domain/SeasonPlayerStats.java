@@ -51,8 +51,9 @@ public class SeasonPlayerStats {
     @Column(nullable = false)
     private int finishes = 0;
 
+    /** Last ranked classic MMR in the season (used for tier cards at season end). */
     @Column(name = "peak_mmr", nullable = false)
-    private double peakMmr = 0;
+    private double finalMmr = 0;
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
@@ -83,8 +84,8 @@ public class SeasonPlayerStats {
     public void setExactBids(int exactBids) { this.exactBids = exactBids; }
     public int getFinishes() { return finishes; }
     public void setFinishes(int finishes) { this.finishes = finishes; }
-    public double getPeakMmr() { return peakMmr; }
-    public void setPeakMmr(double peakMmr) { this.peakMmr = peakMmr; }
+    public double getFinalMmr() { return finalMmr; }
+    public void setFinalMmr(double finalMmr) { this.finalMmr = finalMmr; }
     public Instant getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 }
