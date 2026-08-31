@@ -177,13 +177,14 @@ public class SeasonRewardService {
                 .orElse(stats.getFinalMmr());
     }
 
+    /** Tier card = rank family at season end (matches TierUtil families, not sub-divisions). */
     static RewardSymbolType tierCardForMmr(double mmr) {
-        if (mmr < 1100) return RewardSymbolType.SAND_CARD;
-        if (mmr < 1250) return RewardSymbolType.BRONZE_CARD;
-        if (mmr < 1400) return RewardSymbolType.SILVER_CARD;
-        if (mmr < 1550) return RewardSymbolType.GOLD_CARD;
-        if (mmr < 1700) return RewardSymbolType.PLATINUM_CARD;
-        if (mmr < 1850) return RewardSymbolType.DIAMOND_CARD;
+        if (mmr < 1250) return RewardSymbolType.SAND_CARD;
+        if (mmr < 1400) return RewardSymbolType.BRONZE_CARD;
+        if (mmr < 1550) return RewardSymbolType.SILVER_CARD;
+        if (mmr < 1650) return RewardSymbolType.GOLD_CARD;
+        if (mmr < 1800) return RewardSymbolType.PLATINUM_CARD;
+        if (mmr < 1950) return RewardSymbolType.DIAMOND_CARD;
         return RewardSymbolType.ACE_CARD;
     }
 
