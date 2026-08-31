@@ -111,4 +111,22 @@ public class GameController {
         if (principal == null || request == null) return;
         roomService.voteBot(roomCode, principal.getName(), request.getTargetPlayerId());
     }
+
+    @MessageMapping("/game/{roomCode}/kick")
+    public void kickPlayer(@DestinationVariable String roomCode,
+                           @Payload KickPlayerRequest request,
+                           Principal principal) {
+        if (principal == null || request == null) return;
+        log.debug("KICK received for room {} by {} target {}",
+                roomCode, principal.getName(), request.getTargetPlayerId());
+        roomService.kickPlayer(roomCode, principal.getName(), request.getTargetPlayerId());
+    }
+
+    @MessageMapping("/game/{roomCode}/team")
+    public void setTeam(@DestinationVariable String roomCode,
+                        @Payload TeamRequest request,
+                        Principal principal) {
+        if (principal == null || request == null) return;
+        roomService.setTeam(roomCode, principal.getName(), request.getTeam());
+    }
 }

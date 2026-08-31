@@ -4,7 +4,7 @@ import javax.persistence.*;
 import java.time.Instant;
 
 @Entity
-@Table(name = "player_ratings", uniqueConstraints = @UniqueConstraint(columnNames = {"user_id", "season_id"}))
+@Table(name = "player_ratings", uniqueConstraints = @UniqueConstraint(columnNames = {"user_id", "season_id", "game_mode"}))
 public class PlayerRating {
 
     @Id
@@ -16,6 +16,9 @@ public class PlayerRating {
 
     @Column(name = "season_id", nullable = false)
     private int seasonId = 1;
+
+    @Column(name = "game_mode", nullable = false, length = 20)
+    private String gameMode = "CLASSIC";
 
     @Column(nullable = false)
     private double rating = 1500.0;
@@ -44,6 +47,8 @@ public class PlayerRating {
     public void setUserId(Long userId) { this.userId = userId; }
     public int getSeasonId() { return seasonId; }
     public void setSeasonId(int seasonId) { this.seasonId = seasonId; }
+    public String getGameMode() { return gameMode; }
+    public void setGameMode(String gameMode) { this.gameMode = gameMode; }
     public double getRating() { return rating; }
     public void setRating(double rating) { this.rating = rating; }
     public double getRatingDeviation() { return ratingDeviation; }

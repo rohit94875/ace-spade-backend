@@ -3,6 +3,7 @@ package com.acespade.service;
 import com.acespade.dto.*;
 import com.acespade.model.*;
 import com.acespade.model.enums.DisconnectPolicy;
+import com.acespade.model.enums.GameMode;
 import com.acespade.model.enums.GamePhase;
 import com.acespade.rating.TierUtil;
 import com.acespade.repository.GameRecordRepository;
@@ -46,6 +47,7 @@ public class RoomService {
     private final DisconnectScheduler disconnectScheduler;
     private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
+    private final SeasonService seasonService;
 
     private final ConcurrentHashMap<String, ReentrantLock> roomLocks = new ConcurrentHashMap<>();
     /** roomCode -> playerId the per-turn auto-play timer is currently scheduled for. */
@@ -58,9 +60,14 @@ public class RoomService {
 
     public CreateRoomResponse createRoom(String username, boolean playWithBot,
                                          DisconnectPolicy disconnectPolicy, boolean ranked,
-                                         int maxRounds, boolean publicRoom, Long userId) {
+                                         int maxRounds, boolean publicRoom, String gameMode,
+                                         Long userId) {
         if (userId == null) {
             throw new IllegalArgumentException("Login required to play");
+        }
+        String resolvedGameMode = normalizeGameMode(gameMode);
+        if (ranked && GameMode.CLAN_BATTLE.name().equals(resolvedGameMode)) {
+            throw new IllegalArgumentException("Clan Battle cannot be ranked");
         }
         if (ranked) {
             if (playWithBot) {
@@ -69,7 +76,7 @@ public class RoomService {
             disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
         }
 
-        int resolvedMaxRounds = resolveMaxRounds(ranked, maxRounds);
+        int resolvedMaxRounds = resolveMaxRounds(ranked, maxRounds, resolvedGameMode);
 
         username = resolveNickname(username);
         String roomCode = generateUniqueRoomCode();
@@ -99,7 +106,13 @@ public class RoomService {
                 .publicRoom(publicRoom && !playWithBot)
                 .maxRounds(resolvedMaxRounds)
                 .disconnectPolicy(disconnectPolicy != null ? disconnectPolicy : DisconnectPolicy.FORFEIT_WIN)
+                .gameMode(resolvedGameMode)
                 .build();
+        if (GameMode.CLAN_BATTLE.name().equals(resolvedGameMode)) {
+            state.setTeam1Name("Blue Clan");
+            state.setTeam2Name("Red Clan");
+            gameEngine.initClanTeamScores(state);
+        }
         state.getScores().put(playerId, 0);
 
         if (playWithBot) {
@@ -377,6 +390,71 @@ public class RoomService {
         return toRoomStateDto(state, null);
     }
 
+    public RoomStateDto updateRoomSettings(String roomCode, String hostPlayerId, RoomSettingsRequest request) {
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = getStateOrThrow(roomCode);
+            if (state.getPhase() != GamePhase.LOBBY) {
+                throw new IllegalStateException("Can only change settings in the lobby");
+            }
+            if (!state.getHostPlayerId().equals(hostPlayerId)) {
+                throw new IllegalStateException("Only the host can change room settings");
+            }
+            if (request.getMaxRounds() != null) {
+                int resolved = resolveLobbyMaxRounds(state.isRanked(), state.getGameMode(), request.getMaxRounds());
+                state.setMaxRounds(resolved);
+            }
+            if (GameMode.CLAN_BATTLE.name().equals(state.getGameMode())) {
+                if (request.getTeam1Name() != null && !request.getTeam1Name().trim().isEmpty()) {
+                    state.setTeam1Name(request.getTeam1Name().trim());
+                }
+                if (request.getTeam2Name() != null && !request.getTeam2Name().trim().isEmpty()) {
+                    state.setTeam2Name(request.getTeam2Name().trim());
+                }
+            }
+            gameStateRepository.save(state);
+            broadcastRoomUpdate(state);
+            return toRoomStateDto(state, hostPlayerId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public void kickPlayer(String roomCode, String hostPlayerId, String targetPlayerId) {
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = getStateOrThrow(roomCode);
+            if (state.getPhase() != GamePhase.LOBBY) {
+                sendError(hostPlayerId, "Can only kick players in the lobby");
+                return;
+            }
+            if (!state.getHostPlayerId().equals(hostPlayerId)) {
+                sendError(hostPlayerId, "Only the host can kick players");
+                return;
+            }
+            if (hostPlayerId.equals(targetPlayerId)) {
+                sendError(hostPlayerId, "You cannot kick yourself");
+                return;
+            }
+            Player target = state.findPlayer(targetPlayerId);
+            if (target == null || target.isBot()) {
+                sendError(hostPlayerId, "Player not found");
+                return;
+            }
+            sessionRepository.deleteByPlayerId(targetPlayerId);
+            removePlayerFromLobby(state, targetPlayerId);
+            Map<String, Object> kicked = new LinkedHashMap<>();
+            kicked.put("playerId", targetPlayerId);
+            kicked.put("username", target.getUsername());
+            broadcast(roomCode, GameEvent.of(GameEvent.EventType.PLAYER_KICKED, kicked));
+            log.info("Player {} kicked from room {} by host {}", target.getUsername(), roomCode, hostPlayerId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /** Lists open public rooms — lobby (joinable) and in-progress (spectatable). */
     public List<PublicRoomDto> listPublicRooms() {
         int maxPlayers = gameEngine.getMaxPlayers();
@@ -403,6 +481,7 @@ public class RoomService {
                             .spectatable(inProgress)
                             .phase(s.getPhase().name())
                             .spectatorCount(s.getSpectators() == null ? 0 : s.getSpectators().size())
+                            .gameMode(s.getGameMode() != null ? s.getGameMode() : GameMode.CLASSIC.name())
                             .build();
                 })
                 .sorted(Comparator.comparing(PublicRoomDto::getRoomCode))
@@ -607,7 +686,28 @@ public class RoomService {
                 }
             }
 
+            if (GameMode.CLAN_BATTLE.name().equals(state.getGameMode())) {
+                if (state.getPlayers().size() < 4) {
+                    sendError(playerId, "Clan Battle needs at least 4 players");
+                    return;
+                }
+                boolean allAssigned = state.getPlayers().stream().allMatch(p -> p.getTeamId() != null);
+                if (!allAssigned) {
+                    sendError(playerId, "Everyone must pick a team before starting");
+                    return;
+                }
+                long team1 = state.getPlayers().stream().filter(p -> p.getTeamId() == 1).count();
+                long team2 = state.getPlayers().stream().filter(p -> p.getTeamId() == 2).count();
+                if (team1 < 1 || team2 < 1) {
+                    sendError(playerId, "Each team needs at least one player");
+                    return;
+                }
+            }
+
             state.setRound(1);
+            if (GameMode.CLAN_BATTLE.name().equals(state.getGameMode())) {
+                gameEngine.initClanTeamScores(state);
+            }
             state = gameEngine.startRound(state);
             gameStateRepository.save(state);
 
@@ -616,6 +716,37 @@ public class RoomService {
             lock.unlock();
         }
         processBotTurns(roomCode);
+    }
+
+    public void setTeam(String roomCode, String playerId, int team) {
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = getStateOrThrow(roomCode);
+            if (state.getPhase() != GamePhase.LOBBY) {
+                sendError(playerId, "Game already started");
+                return;
+            }
+            if (!GameMode.CLAN_BATTLE.name().equals(state.getGameMode())) {
+                sendError(playerId, "Team pick is only for Clan Battle rooms");
+                return;
+            }
+            Player player = state.findPlayer(playerId);
+            if (player == null || player.isBot()) {
+                sendError(playerId, "Cannot pick a team");
+                return;
+            }
+            if (team != 1 && team != 2) {
+                sendError(playerId, "Team must be 1 (Blue) or 2 (Red)");
+                return;
+            }
+            player.setTeamId(team);
+            player.setReady(false);
+            gameStateRepository.save(state);
+            broadcastRoomUpdate(state);
+        } finally {
+            lock.unlock();
+        }
     }
 
     public void setReady(String roomCode, String playerId, boolean ready) {
@@ -638,7 +769,7 @@ public class RoomService {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("playerId", playerId);
             payload.put("ready", ready);
-            payload.put("players", toPlayerDtoList(state, null));
+            payload.put("players", toPlayerDtoList(state, null, null));
             broadcast(roomCode, GameEvent.of(GameEvent.EventType.PLAYER_READY, payload));
         } finally {
             lock.unlock();
@@ -709,7 +840,7 @@ public class RoomService {
                 payload.put("playerId", targetPlayerId);
                 payload.put("botPlayerId", target.getId());
                 payload.put("botUsername", target.getUsername());
-                payload.put("players", toPlayerDtoList(state, null));
+                payload.put("players", toPlayerDtoList(state, null, null));
                 payload.put("botVotes", toBotVotesDto(state));
                 broadcast(roomCode, GameEvent.of(GameEvent.EventType.BOT_TAKEOVER, payload));
                 runBots = true;
@@ -976,7 +1107,7 @@ public class RoomService {
                 payload.put("playerId", playerId);
                 payload.put("botPlayerId", player.getId());
                 payload.put("botUsername", player.getUsername());
-                payload.put("players", toPlayerDtoList(state, null));
+                payload.put("players", toPlayerDtoList(state, null, null));
                 broadcast(roomCode, GameEvent.of(GameEvent.EventType.BOT_TAKEOVER, payload));
                 runBots = true;
             } else {
@@ -1009,7 +1140,7 @@ public class RoomService {
         broadcastRoomUpdate(state);
         Map<String, Object> left = new LinkedHashMap<>();
         left.put("playerId", playerId);
-        left.put("players", toPlayerDtoList(state, null));
+        left.put("players", toPlayerDtoList(state, null, null));
         broadcast(state.getRoomCode(), GameEvent.of(GameEvent.EventType.PLAYER_LEFT, left));
     }
 
@@ -1018,14 +1149,6 @@ public class RoomService {
     }
 
     private void endGameByForfeit(GameState state, Player forfeiter) {
-        List<Player> remaining = state.getPlayers().stream()
-                .filter(p -> !p.getId().equals(forfeiter.getId()))
-                .collect(Collectors.toList());
-
-        Player winner = remaining.stream()
-                .max(Comparator.comparingInt(p -> state.getScores().getOrDefault(p.getId(), 0)))
-                .orElse(remaining.isEmpty() ? forfeiter : remaining.get(0));
-
         state.setPhase(GamePhase.GAME_END);
         gameStateRepository.save(state);
 
@@ -1034,21 +1157,33 @@ public class RoomService {
             emptyRound.put(p.getId(), 0);
         }
 
-        RoundEndedPayload payload = RoundEndedPayload.builder()
+        boolean clan = GameMode.CLAN_BATTLE.name().equals(state.getGameMode());
+        RoundEndedPayload.RoundEndedPayloadBuilder payloadBuilder = RoundEndedPayload.builder()
                 .round(state.getRound())
                 .roundScores(emptyRound)
-                .cumulativeScores(new HashMap<>(state.getScores()))
+                .cumulativeScores(clan ? emptyRound : new HashMap<>(state.getScores()))
                 .bids(gameEngine.getBids(state))
                 .tricksWon(gameEngine.getTricksWon(state))
                 .gameOver(true)
-                .winnerUsername(winner.getUsername())
-                .winnerScore(state.getScores().getOrDefault(winner.getId(), 0))
+                .winnerUsername(gameEngine.getWinnerUsername(state))
+                .winnerScore(gameEngine.getWinnerScore(state))
                 .forfeit(true)
                 .forfeitedUsername(forfeiter.getUsername())
-                .ratingUpdates(saveGameRecord(state, forfeiter.getId()))
-                .build();
+                .ratingUpdates(saveGameRecord(state, forfeiter.getId()));
 
-        broadcast(state.getRoomCode(), GameEvent.of(GameEvent.EventType.GAME_ENDED, payload));
+        if (clan) {
+            gameEngine.initClanTeamScores(state);
+            Map<String, Integer> zeroTeamRound = new LinkedHashMap<>();
+            zeroTeamRound.put("1", 0);
+            zeroTeamRound.put("2", 0);
+            payloadBuilder
+                    .teamRoundScores(zeroTeamRound)
+                    .teamCumulativeScores(new LinkedHashMap<>(state.getTeamScores()))
+                    .teamBids(gameEngine.getClanTeamBids(state))
+                    .teamTricksWon(gameEngine.getClanTeamTricks(state));
+        }
+
+        broadcast(state.getRoomCode(), GameEvent.of(GameEvent.EventType.GAME_ENDED, payloadBuilder.build()));
     }
 
     private void processBotTurns(String roomCode) {
@@ -1300,7 +1435,7 @@ public class RoomService {
         // Broadcast public round info
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("round", state.getRound());
-        payload.put("players", toPlayerDtoList(state, null));
+        payload.put("players", toPlayerDtoList(state, null, null));
         payload.put("currentTurnPlayerId", state.getPlayers().get(state.getCurrentPlayerIndex()).getId());
         broadcast(state.getRoomCode(), GameEvent.of(GameEvent.EventType.ROUND_STARTED, payload));
 
@@ -1350,6 +1485,7 @@ public class RoomService {
     }
 
     private void broadcastRoundEnded(GameState state, boolean gameOver) {
+        boolean clan = GameMode.CLAN_BATTLE.name().equals(state.getGameMode());
         Map<String, Integer> roundScores = gameEngine.getRoundScores(state);
         Map<String, Integer> bids = gameEngine.getBids(state);
         Map<String, Integer> tricksWon = gameEngine.getTricksWon(state);
@@ -1363,21 +1499,33 @@ public class RoomService {
             ratingUpdates = saveGameRecord(state, null);
         }
 
-        RoundEndedPayload payload = RoundEndedPayload.builder()
+        Map<String, Integer> cumulativeScores = clan
+                ? state.getPlayers().stream().collect(Collectors.toMap(Player::getId, p -> 0))
+                : new HashMap<>(state.getScores());
+
+        RoundEndedPayload.RoundEndedPayloadBuilder payloadBuilder = RoundEndedPayload.builder()
                 .round(completedRound)
                 .roundScores(roundScores)
-                .cumulativeScores(new HashMap<>(state.getScores()))
+                .cumulativeScores(cumulativeScores)
                 .bids(bids)
                 .tricksWon(tricksWon)
                 .gameOver(gameOver)
                 .winnerUsername(gameOver ? gameEngine.getWinnerUsername(state) : null)
                 .winnerScore(gameOver ? gameEngine.getWinnerScore(state) : 0)
-                .ratingUpdates(ratingUpdates)
-                .build();
+                .ratingUpdates(ratingUpdates);
+
+        if (clan) {
+            gameEngine.initClanTeamScores(state);
+            payloadBuilder
+                    .teamRoundScores(gameEngine.getClanTeamRoundScores(state))
+                    .teamCumulativeScores(new LinkedHashMap<>(state.getTeamScores()))
+                    .teamBids(gameEngine.getClanTeamBids(state))
+                    .teamTricksWon(gameEngine.getClanTeamTricks(state));
+        }
 
         broadcast(state.getRoomCode(), GameEvent.of(
                 gameOver ? GameEvent.EventType.GAME_ENDED : GameEvent.EventType.ROUND_ENDED,
-                payload));
+                payloadBuilder.build()));
     }
 
     private void broadcast(String roomCode, GameEvent event) {
@@ -1395,27 +1543,24 @@ public class RoomService {
 
     private Map<String, RatingDeltaDto> saveGameRecord(GameState state, String forfeiterPlayerId) {
         try {
-            Map<String, Integer> usernameScores = new LinkedHashMap<>();
-            for (Player p : state.getPlayers()) {
-                usernameScores.put(p.getUsername(), state.getScores().getOrDefault(p.getId(), 0));
-            }
-            String scoresJson = objectMapper.writeValueAsString(usernameScores);
-
-            String winnerUsername;
-            int winnerScore;
-            if (forfeiterPlayerId != null) {
-                List<Player> remaining = state.getPlayers().stream()
-                        .filter(p -> !p.getId().equals(forfeiterPlayerId))
-                        .collect(Collectors.toList());
-                Player winner = remaining.stream()
-                        .max(Comparator.comparingInt(p -> state.getScores().getOrDefault(p.getId(), 0)))
-                        .orElse(remaining.isEmpty() ? state.findPlayer(forfeiterPlayerId) : remaining.get(0));
-                winnerUsername = winner != null ? winner.getUsername() : gameEngine.getWinnerUsername(state);
-                winnerScore = winner != null ? state.getScores().getOrDefault(winner.getId(), 0) : gameEngine.getWinnerScore(state);
+            boolean clan = GameMode.CLAN_BATTLE.name().equals(state.getGameMode());
+            String scoresJson;
+            if (clan) {
+                gameEngine.initClanTeamScores(state);
+                Map<String, Integer> teamScoreByName = new LinkedHashMap<>();
+                teamScoreByName.put(state.getTeam1Name(), state.getTeamScores().getOrDefault("1", 0));
+                teamScoreByName.put(state.getTeam2Name(), state.getTeamScores().getOrDefault("2", 0));
+                scoresJson = objectMapper.writeValueAsString(teamScoreByName);
             } else {
-                winnerUsername = gameEngine.getWinnerUsername(state);
-                winnerScore = gameEngine.getWinnerScore(state);
+                Map<String, Integer> usernameScores = new LinkedHashMap<>();
+                for (Player p : state.getPlayers()) {
+                    usernameScores.put(p.getUsername(), state.getScores().getOrDefault(p.getId(), 0));
+                }
+                scoresJson = objectMapper.writeValueAsString(usernameScores);
             }
+
+            String winnerUsername = gameEngine.getWinnerUsername(state);
+            int winnerScore = gameEngine.getWinnerScore(state);
 
             GameRecord record = GameRecord.builder()
                     .roomCode(state.getRoomCode())
@@ -1426,7 +1571,8 @@ public class RoomService {
                     .playedAt(LocalDateTime.now())
                     .ranked(state.isRanked())
                     .maxRounds(state.getMaxRounds())
-                    .seasonId(TierUtil.CURRENT_SEASON_ID)
+                    .seasonId(seasonService.getRankedSeasonId())
+                    .gameMode(state.getGameMode() != null ? state.getGameMode() : SeasonService.CLASSIC_MODE)
                     .build();
 
             record = gameRecordRepository.save(record);
@@ -1465,6 +1611,15 @@ public class RoomService {
                 .filter(name -> name != null && allowed.contains(name))
                 .distinct()
                 .collect(Collectors.toList());
+    }
+
+    public String resolvePlayerIdFromSession(String sessionToken, String roomCode) {
+        PlayerSession session = sessionRepository.findByToken(sessionToken)
+                .orElseThrow(() -> new IllegalArgumentException("Session expired — rejoin with room code"));
+        if (!session.getRoomCode().equalsIgnoreCase(roomCode)) {
+            throw new IllegalArgumentException("Session does not match this room");
+        }
+        return session.getPlayerId();
     }
 
     public UpdateNicknameResponse updateNickname(String roomCode, String sessionToken, String requestedNickname) {
@@ -1542,11 +1697,18 @@ public class RoomService {
         return roomLocks.computeIfAbsent(roomCode, k -> new ReentrantLock());
     }
 
-    private static int resolveMaxRounds(boolean ranked, int maxRounds) {
-        if (!ranked) {
-            return TierUtil.CASUAL_MAX_ROUNDS;
+    private static int resolveMaxRounds(boolean ranked, int maxRounds, String gameMode) {
+        return resolveLobbyMaxRounds(ranked, gameMode, maxRounds);
+    }
+
+    private static int resolveLobbyMaxRounds(boolean ranked, String gameMode, int maxRounds) {
+        if (ranked) {
+            return clampRankedMaxRounds(maxRounds);
         }
-        return clampRankedMaxRounds(maxRounds);
+        if (GameMode.CLAN_BATTLE.name().equals(gameMode)) {
+            return clampRankedMaxRounds(maxRounds);
+        }
+        return TierUtil.CASUAL_MAX_ROUNDS;
     }
 
     private static int normalizeStoredMaxRounds(int maxRounds) {
@@ -1566,6 +1728,17 @@ public class RoomService {
         return maxRounds;
     }
 
+    private static String normalizeGameMode(String gameMode) {
+        if (gameMode == null || gameMode.trim().isEmpty()) {
+            return GameMode.CLASSIC.name();
+        }
+        try {
+            return GameMode.valueOf(gameMode.trim().toUpperCase(Locale.ROOT)).name();
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Unknown game mode: " + gameMode);
+        }
+    }
+
     private String generateUniqueRoomCode() {
         String code;
         do {
@@ -1578,7 +1751,7 @@ public class RoomService {
         return code;
     }
 
-    private RoomStateDto toRoomStateDto(GameState state, String currentPlayerId) {
+    private RoomStateDto toRoomStateDto(GameState state, String viewerPlayerId) {
         syncPresenceFromScheduler(state);
         String currentTurnId = state.getPlayers().isEmpty() ? null
                 : state.getPlayers().get(state.getCurrentPlayerIndex() % state.getPlayers().size()).getId();
@@ -1587,7 +1760,7 @@ public class RoomService {
                 .phase(state.getPhase())
                 .round(state.getRound())
                 .maxRounds(normalizeStoredMaxRounds(state.getMaxRounds()))
-                .players(toPlayerDtoList(state, currentTurnId))
+                .players(toPlayerDtoList(state, currentTurnId, viewerPlayerId))
                 .scores(state.getScores())
                 .currentTurnPlayerId(currentTurnId)
                 .hostPlayerId(state.getHostPlayerId())
@@ -1600,7 +1773,19 @@ public class RoomService {
                 .presence(toPresenceMap(state))
                 .spectators(toSpectatorDtoList(state))
                 .botVotes(toBotVotesDto(state))
+                .gameMode(state.getGameMode() != null ? state.getGameMode() : GameMode.CLASSIC.name())
+                .teamScores(computeTeamScores(state))
+                .team1Name(state.getTeam1Name())
+                .team2Name(state.getTeam2Name())
                 .build();
+    }
+
+    private Map<String, Integer> computeTeamScores(GameState state) {
+        if (!GameMode.CLAN_BATTLE.name().equals(state.getGameMode())) {
+            return null;
+        }
+        gameEngine.initClanTeamScores(state);
+        return new LinkedHashMap<>(state.getTeamScores());
     }
 
     private SessionResumeResponse buildSpectatorResumeResponse(GameState state, PlayerSession session,
@@ -1766,12 +1951,21 @@ public class RoomService {
         }
     }
 
-    private List<PlayerDto> toPlayerDtoList(GameState state, String currentTurnId) {
+    private List<PlayerDto> toPlayerDtoList(GameState state, String currentTurnId, String viewerPlayerId) {
         long now = System.currentTimeMillis();
-        return state.getPlayers().stream().map(p -> PlayerDto.builder()
+        boolean ruthlessHidden = GameMode.RUTHLESS_HIDDEN.name().equals(state.getGameMode())
+                && (state.getPhase() == GamePhase.BIDDING || state.getPhase() == GamePhase.PLAYING);
+        return state.getPlayers().stream().map(p -> {
+            Integer bid = p.getBid();
+            boolean bidPlaced = p.getBid() != null;
+            if (ruthlessHidden && (viewerPlayerId == null || !viewerPlayerId.equals(p.getId()))) {
+                bid = null;
+            }
+            return PlayerDto.builder()
                 .id(p.getId())
                 .username(p.getUsername())
-                .bid(p.getBid())
+                .bid(bid)
+                .bidPlaced(bidPlaced)
                 .tricksWon(p.getTricksWon())
                 .cardCount(p.getHand() == null ? 0 : p.getHand().size())
                 .currentTurn(p.getId().equals(currentTurnId))
@@ -1783,9 +1977,10 @@ public class RoomService {
                 .presenceStatus(p.isBot() ? "ONLINE" : resolvePresenceStatus(state, p, now))
                 .autoPlayCount(p.getAutoPlayCount())
                 .ready(p.isReady())
+                .teamId(p.getTeamId())
                 .tier(p.isBot() ? null : ratingService.tierBadgeForUser(p.getUserId()))
-                .build()
-        ).collect(Collectors.toList());
+                .build();
+        }).collect(Collectors.toList());
     }
 
     private Spectator findSpectator(GameState state, String spectatorId) {

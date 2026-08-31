@@ -36,6 +36,10 @@ public class RatingService {
     private final UserRepository userRepository;
     private final GameRecordRepository gameRecordRepository;
     private final ObjectMapper objectMapper;
+    private final SeasonService seasonService;
+    private final SeasonRewardService seasonRewardService;
+
+    private static final String CLASSIC_MODE = SeasonService.CLASSIC_MODE;
 
     @Value("${ace.rating.forfeit-base-mmr:25.0}")
     private double forfeitBaseMmr;
@@ -45,11 +49,13 @@ public class RatingService {
     }
 
     public PlayerRating getOrCreateRating(Long userId) {
-        return playerRatingRepository.findByUserIdAndSeasonId(userId, TierUtil.CURRENT_SEASON_ID)
+        int seasonId = seasonService.getRankedSeasonId();
+        return playerRatingRepository.findByUserIdAndSeasonIdAndGameMode(userId, seasonId, CLASSIC_MODE)
                 .orElseGet(() -> {
                     PlayerRating rating = new PlayerRating();
                     rating.setUserId(userId);
-                    rating.setSeasonId(TierUtil.CURRENT_SEASON_ID);
+                    rating.setSeasonId(seasonId);
+                    rating.setGameMode(CLASSIC_MODE);
                     return playerRatingRepository.save(rating);
                 });
     }
@@ -159,7 +165,8 @@ public class RatingService {
 
             RatingHistory history = new RatingHistory();
             history.setUserId(p.getUserId());
-            history.setSeasonId(TierUtil.CURRENT_SEASON_ID);
+            history.setSeasonId(pr.getSeasonId());
+            history.setGameMode(CLASSIC_MODE);
             history.setGameRecordId(record.getId());
             history.setRatingBefore(beforeRating);
             history.setRatingAfter(afterRating);
@@ -186,6 +193,14 @@ public class RatingService {
                     .placementComplete(TierUtil.isPlacementComplete(pr.getPlacementGames()))
                     .placementGames(pr.getPlacementGames())
                     .build());
+
+            final int playerRank = ranks.get(i);
+            seasonService.getActiveOrGraceSeason().ifPresent(season -> {
+                if (season.isRewardsTracked()) {
+                    boolean won = playerRank == 1;
+                    seasonRewardService.recordRankedClassicResult(season.getId(), p.getUserId(), won, afterRating);
+                }
+            });
         }
 
         return deltas;
@@ -238,7 +253,8 @@ public class RatingService {
 
         RatingHistory history = new RatingHistory();
         history.setUserId(forfeiter.getUserId());
-        history.setSeasonId(TierUtil.CURRENT_SEASON_ID);
+        history.setSeasonId(pr.getSeasonId());
+        history.setGameMode(CLASSIC_MODE);
         history.setGameRecordId(record.getId());
         history.setRatingBefore(beforeRating);
         history.setRatingAfter(afterRating);
@@ -270,9 +286,13 @@ public class RatingService {
     }
 
     public List<LeaderboardEntryDto> getLeaderboard(int limit) {
+        return getLeaderboardForSeason(seasonService.getRankedSeasonId(), CLASSIC_MODE, limit);
+    }
+
+    public List<LeaderboardEntryDto> getLeaderboardForSeason(int seasonId, String gameMode, int limit) {
         int capped = Math.min(Math.max(limit, 1), 100);
-        List<PlayerRating> ratings = playerRatingRepository.findBySeasonIdOrderByRatingDesc(
-                TierUtil.CURRENT_SEASON_ID, PageRequest.of(0, capped));
+        List<PlayerRating> ratings = playerRatingRepository.findBySeasonIdAndGameModeOrderByRatingDesc(
+                seasonId, gameMode, PageRequest.of(0, capped));
 
         List<LeaderboardEntryDto> entries = new ArrayList<>();
         int rank = 1;

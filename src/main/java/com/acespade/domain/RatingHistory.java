@@ -17,6 +17,9 @@ public class RatingHistory {
     @Column(name = "season_id", nullable = false)
     private int seasonId;
 
+    @Column(name = "game_mode", nullable = false, length = 20)
+    private String gameMode = "CLASSIC";
+
     @Column(name = "game_record_id")
     private Long gameRecordId;
 
@@ -38,6 +41,8 @@ public class RatingHistory {
     public void setUserId(Long userId) { this.userId = userId; }
     public int getSeasonId() { return seasonId; }
     public void setSeasonId(int seasonId) { this.seasonId = seasonId; }
+    public String getGameMode() { return gameMode; }
+    public void setGameMode(String gameMode) { this.gameMode = gameMode; }
     public Long getGameRecordId() { return gameRecordId; }
     public void setGameRecordId(Long gameRecordId) { this.gameRecordId = gameRecordId; }
     public double getRatingBefore() { return ratingBefore; }
