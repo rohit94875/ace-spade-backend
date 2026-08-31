@@ -3,6 +3,7 @@ package com.acespade.service;
 import com.acespade.domain.PlayerRating;
 import com.acespade.domain.SeasonPlayerStats;
 import com.acespade.domain.SeasonReward;
+import com.acespade.rating.RewardSymbolUtil;
 import com.acespade.rating.TierUtil;
 import com.acespade.model.enums.GameMode;
 import com.acespade.model.enums.RewardSymbolType;
@@ -97,9 +98,6 @@ public class SeasonRewardService {
 
     @Transactional
     public void computeAndPersistRewards(int seasonId) {
-        if (rewardRepository.findBySeasonId(seasonId).stream().findAny().isPresent()) {
-            return;
-        }
         List<SeasonPlayerStats> stats = statsRepository.findBySeasonIdAndGameMode(seasonId, GameMode.CLASSIC);
         for (SeasonPlayerStats s : stats) {
             if (!eligibleForRewards(s)) {
@@ -107,33 +105,61 @@ public class SeasonRewardService {
             }
             double finalMmr = finalMmrForTierCard(seasonId, s);
             RewardSymbolType tierCard = tierCardForMmr(finalMmr);
-            if (tierCard != null) {
-                saveReward(seasonId, s.getUserId(), tierCard, finalMmr);
+            if (tierCard == null) {
+                continue;
             }
+            upsertTierCard(seasonId, s.getUserId(), tierCard, finalMmr);
         }
         List<SeasonPlayerStats> eligible = stats.stream()
                 .filter(SeasonRewardService::eligibleForRewards)
                 .collect(java.util.stream.Collectors.toList());
-        awardTop(seasonId, eligible, RewardSymbolType.MOST_MATCHES,
+        awardTopIfMissing(seasonId, eligible, RewardSymbolType.MOST_MATCHES,
                 Comparator.comparingInt(SeasonPlayerStats::getMatchesPlayed));
-        awardTop(seasonId, eligible, RewardSymbolType.MOST_WINS,
+        awardTopIfMissing(seasonId, eligible, RewardSymbolType.MOST_WINS,
                 Comparator.comparingInt(SeasonPlayerStats::getWins));
-        awardTop(seasonId, eligible, RewardSymbolType.MOST_LOSSES,
+        awardTopIfMissing(seasonId, eligible, RewardSymbolType.MOST_LOSSES,
                 Comparator.comparingInt(SeasonPlayerStats::getLosses));
-        awardTop(seasonId, eligible, RewardSymbolType.WIN_STREAK,
+        awardTopIfMissing(seasonId, eligible, RewardSymbolType.WIN_STREAK,
                 Comparator.comparingInt(SeasonPlayerStats::getMaxWinStreak));
-        awardTop(seasonId, eligible, RewardSymbolType.LOSS_STREAK,
+        awardTopIfMissing(seasonId, eligible, RewardSymbolType.LOSS_STREAK,
                 Comparator.comparingInt(SeasonPlayerStats::getMaxLossStreak));
-        awardTop(seasonId, eligible, RewardSymbolType.FINISHER,
+        awardTopIfMissing(seasonId, eligible, RewardSymbolType.FINISHER,
                 Comparator.comparingInt(SeasonPlayerStats::getFinishes));
 
-        List<PlayerRating> ratings = playerRatingRepository.findBySeasonIdAndGameModeOrderByRatingDesc(
-                seasonId, GameMode.CLASSIC.name(), PageRequest.of(0, 50));
-        ratings.stream()
-                .filter(pr -> pr.getGamesPlayed() >= TierUtil.PLACEMENT_GAMES_REQUIRED)
-                .findFirst()
-                .ifPresent(top -> saveReward(seasonId, top.getUserId(), RewardSymbolType.TOP_MMR, top.getRating()));
+        if (!rewardRepository.findBySeasonIdAndSymbolType(seasonId, RewardSymbolType.TOP_MMR).isPresent()) {
+            List<PlayerRating> ratings = playerRatingRepository.findBySeasonIdAndGameModeOrderByRatingDesc(
+                    seasonId, GameMode.CLASSIC.name(), PageRequest.of(0, 50));
+            ratings.stream()
+                    .filter(pr -> pr.getGamesPlayed() >= TierUtil.PLACEMENT_GAMES_REQUIRED)
+                    .findFirst()
+                    .ifPresent(top -> saveReward(seasonId, top.getUserId(), RewardSymbolType.TOP_MMR, top.getRating()));
+        }
         log.info("operation=computeAndPersistRewards feature=season-rewards seasonId={} status=exit", seasonId);
+    }
+
+    private void upsertTierCard(int seasonId, Long userId, RewardSymbolType tierCard, double finalMmr) {
+        Optional<SeasonReward> existing = rewardRepository.findBySeasonIdAndUserId(seasonId, userId).stream()
+                .filter(r -> RewardSymbolUtil.isTierCard(r.getSymbolType()))
+                .findFirst();
+        if (existing.isPresent()) {
+            SeasonReward reward = existing.get();
+            if (reward.getSymbolType() != tierCard || reward.getStatValue() == null
+                    || Math.abs(reward.getStatValue() - finalMmr) > 0.01) {
+                reward.setSymbolType(tierCard);
+                reward.setStatValue(finalMmr);
+                rewardRepository.save(reward);
+            }
+            return;
+        }
+        saveReward(seasonId, userId, tierCard, finalMmr);
+    }
+
+    private void awardTopIfMissing(int seasonId, List<SeasonPlayerStats> stats, RewardSymbolType symbol,
+                                   Comparator<SeasonPlayerStats> comparator) {
+        if (rewardRepository.findBySeasonIdAndSymbolType(seasonId, symbol).isPresent()) {
+            return;
+        }
+        awardTop(seasonId, stats, symbol, comparator);
     }
 
     private void awardTop(int seasonId, List<SeasonPlayerStats> stats, RewardSymbolType symbol,
