@@ -1326,10 +1326,11 @@ public class RoomService {
                     ? state.getPlayers().get(state.getLeadPlayerIndex()).getId()
                     : state.getPlayers().get(state.getCurrentPlayerIndex()).getId();
 
+            boolean hideBid = GameMode.RUTHLESS_HIDDEN.name().equals(state.getGameMode());
             Map<String, Object> bidPayload = new LinkedHashMap<>();
             bidPayload.put("playerId", playerId);
             bidPayload.put("username", bidder.getUsername());
-            bidPayload.put("amount", amount);
+            bidPayload.put("amount", hideBid ? null : amount);
             bidPayload.put("nextTurnPlayerId", nextPlayerId);
             bidPayload.put("phase", state.getPhase());
 
