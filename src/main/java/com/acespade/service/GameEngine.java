@@ -264,14 +264,18 @@ public class GameEngine {
     }
 
     /**
-     * Ruthless: exact bid uses classic points; miss is the negative of the hit value
-     * (e.g. bid 1 → +21 if exact, -21 if missed).
+     * Ruthless: exact bid uses classic points.
+     * Miss: negative of classic points for max(bid, tricksWon) — overshooting
+     * hurts more (e.g. bid 4 / won 5 → max 5 → -65).
      */
     public int calculateRuthlessRoundScore(Player player) {
         int bid = player.getBid();
         int won = player.getTricksWon();
-        int hitValue = calculateClassicRoundScore(bid);
-        return won == bid ? hitValue : -hitValue;
+        if (won == bid) {
+            return calculateClassicRoundScore(bid);
+        }
+        int penaltyBase = Math.max(bid, won);
+        return -calculateClassicRoundScore(penaltyBase);
     }
 
     private List<Card> createShuffledDoubleDeck() {

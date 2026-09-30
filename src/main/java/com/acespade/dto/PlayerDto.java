@@ -25,7 +25,7 @@ public class PlayerDto {
     private int autoPlayCount;
     private boolean ready;
 
-    /** True when bid is placed but amount is hidden (Ruthless mode). */
+    /** True when a bid amount is set. */
     private boolean bidPlaced;
 
     /** Clan Battle team: 1 or 2. */
