@@ -56,9 +56,42 @@ public class Player implements Serializable {
     /** Clan Battle: 1 = team blue, 2 = team red. */
     private Integer teamId;
 
+    /** Poker: chip stack. */
+    @Builder.Default
+    private int chips = 0;
+
+    /** Poker: chips committed this betting street. */
+    @Builder.Default
+    private int betThisStreet = 0;
+
+    /** Poker: chips committed this hand (all streets). */
+    @Builder.Default
+    private int totalBetThisHand = 0;
+
+    /** Poker: folded this hand. */
+    @Builder.Default
+    private boolean folded = false;
+
+    /** Poker: put all remaining chips in (no further betting). */
+    @Builder.Default
+    private boolean allIn = false;
+
+    /** Poker: already acted this street since last aggressor. */
+    @Builder.Default
+    private boolean actedThisStreet = false;
+
     public void resetForRound() {
         this.hand = new ArrayList<>();
         this.bid = null;
         this.tricksWon = 0;
+    }
+
+    public void resetForPokerHand() {
+        this.hand = new ArrayList<>();
+        this.betThisStreet = 0;
+        this.totalBetThisHand = 0;
+        this.folded = false;
+        this.allIn = false;
+        this.actedThisStreet = false;
     }
 }

@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -58,11 +59,17 @@ public class RatingService {
         String mode = GameMode.normalizeRankedMode(gameMode);
         return playerRatingRepository.findByUserIdAndSeasonIdAndGameMode(userId, seasonId, mode)
                 .orElseGet(() -> {
-                    PlayerRating rating = new PlayerRating();
-                    rating.setUserId(userId);
-                    rating.setSeasonId(seasonId);
-                    rating.setGameMode(mode);
-                    return playerRatingRepository.save(rating);
+                    try {
+                        PlayerRating rating = new PlayerRating();
+                        rating.setUserId(userId);
+                        rating.setSeasonId(seasonId);
+                        rating.setGameMode(mode);
+                        return playerRatingRepository.save(rating);
+                    } catch (DataIntegrityViolationException e) {
+                        // Concurrent create or stale unique key — re-read
+                        return playerRatingRepository.findByUserIdAndSeasonIdAndGameMode(userId, seasonId, mode)
+                                .orElseThrow(() -> e);
+                    }
                 });
     }
 
@@ -73,6 +80,7 @@ public class RatingService {
 
     public UserProfileDto toProfile(User user, PlayerRating rating) {
         boolean placementComplete = TierUtil.isPlacementComplete(rating.getPlacementGames());
+        List<ModeRatingDto> modeRatings = buildModeRatings(user.getId(), rating.getSeasonId());
         return UserProfileDto.builder()
                 .id(user.getId())
                 .email(user.getEmail())
@@ -86,11 +94,13 @@ public class RatingService {
                 .seasonId(rating.getSeasonId())
                 .leaveCount(rating.getLeaveCount())
                 .nextLeavePenaltyMmr(Math.round(leavePenaltyMmr(rating.getLeaveCount()) * 10.0) / 10.0)
+                .modeRatings(modeRatings)
                 .build();
     }
 
     public PublicUserProfileDto toPublicProfile(User user, PlayerRating rating) {
         boolean placementComplete = TierUtil.isPlacementComplete(rating.getPlacementGames());
+        List<ModeRatingDto> modeRatings = buildModeRatings(user.getId(), rating.getSeasonId());
         return PublicUserProfileDto.builder()
                 .id(user.getId())
                 .username(user.getUsername())
@@ -103,6 +113,40 @@ public class RatingService {
                 .seasonId(rating.getSeasonId())
                 .leaveCount(rating.getLeaveCount())
                 .nextLeavePenaltyMmr(Math.round(leavePenaltyMmr(rating.getLeaveCount()) * 10.0) / 10.0)
+                .modeRatings(modeRatings)
+                .build();
+    }
+
+    private List<ModeRatingDto> buildModeRatings(Long userId, int seasonId) {
+        List<ModeRatingDto> out = new ArrayList<>();
+        for (GameMode mode : GameMode.rankedModes()) {
+            PlayerRating pr = getOrCreateRating(userId, mode.name());
+            out.add(toModeRating(pr));
+        }
+        return out;
+    }
+
+    private ModeRatingDto toModeRating(PlayerRating pr) {
+        boolean placed = TierUtil.isPlacementComplete(pr.getPlacementGames());
+        Integer rank = null;
+        if (placed) {
+            long ahead = playerRatingRepository
+                    .countBySeasonIdAndGameModeAndPlacementGamesGreaterThanEqualAndRatingGreaterThan(
+                            pr.getSeasonId(),
+                            pr.getGameMode(),
+                            TierUtil.PLACEMENT_GAMES_REQUIRED,
+                            pr.getRating());
+            rank = (int) ahead + 1;
+        }
+        return ModeRatingDto.builder()
+                .gameMode(pr.getGameMode())
+                .mmr(Math.round(pr.getRating() * 10.0) / 10.0)
+                .tier(TierUtil.tierBadge(pr.getPlacementGames(), pr.getRating()))
+                .placementComplete(placed)
+                .placementGames(pr.getPlacementGames())
+                .placementRequired(TierUtil.PLACEMENT_GAMES_REQUIRED)
+                .gamesPlayed(pr.getGamesPlayed())
+                .rank(rank)
                 .build();
     }
 
@@ -124,6 +168,29 @@ public class RatingService {
         }
         PlayerRating rating = getOrCreateRating(userId, gameMode);
         return TierUtil.tierBadge(rating.getPlacementGames(), rating.getRating());
+    }
+
+    /**
+     * Persist per-player history for unranked modes (Clan Battle, Poker) without MMR updates.
+     */
+    @Transactional
+    public void recordUnrankedPlayers(GameRecord record, List<Player> players, Map<String, Integer> scores) {
+        for (Player p : players) {
+            if (p.isBot() || p.getUserId() == null) {
+                continue;
+            }
+            GameRecordPlayer grp = new GameRecordPlayer();
+            grp.setGameRecordId(record.getId());
+            grp.setUserId(p.getUserId());
+            grp.setUsername(p.getUsername());
+            grp.setScore(scores.getOrDefault(p.getId(), 0));
+            grp.setRatingBefore(null);
+            grp.setRatingAfter(null);
+            grp.setRatingDelta(null);
+            gameRecordPlayerRepository.save(grp);
+        }
+        log.debug("operation=recordUnrankedPlayers feature=poker-mode status=exit gameRecordId={} players={}",
+                record.getId(), players.size());
     }
 
     @Transactional

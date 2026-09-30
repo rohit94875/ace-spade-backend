@@ -7,7 +7,8 @@ import java.util.Locale;
 public enum GameMode {
     CLASSIC,
     RUTHLESS_HIDDEN,
-    CLAN_BATTLE;
+    CLAN_BATTLE,
+    POKER;
 
     /** Modes that can run ranked and have their own MMR / season rewards. */
     public static List<GameMode> rankedModes() {

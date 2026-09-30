@@ -33,4 +33,11 @@ public class PlayerDto {
 
     /** Ranked tier badge after placement; null while placing or for bots/guests. */
     private String tier;
+
+    /** Poker chip stack (also mirrored in scores during poker). */
+    private Integer chips;
+
+    private Integer betThisStreet;
+    private boolean folded;
+    private boolean allIn;
 }

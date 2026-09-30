@@ -122,6 +122,16 @@ public class GameController {
         roomService.kickPlayer(roomCode, principal.getName(), request.getTargetPlayerId());
     }
 
+    @MessageMapping("/game/{roomCode}/poker")
+    public void pokerAction(@DestinationVariable String roomCode,
+                            @Payload PokerActionRequest request,
+                            Principal principal) {
+        if (principal == null || request == null || request.getAction() == null) return;
+        log.debug("POKER {} received for room {} by {}",
+                request.getAction(), roomCode, principal.getName());
+        roomService.placePokerAction(roomCode, principal.getName(), request.getAction());
+    }
+
     @MessageMapping("/game/{roomCode}/team")
     public void setTeam(@DestinationVariable String roomCode,
                         @Payload TeamRequest request,

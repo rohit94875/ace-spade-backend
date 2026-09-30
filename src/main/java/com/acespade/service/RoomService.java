@@ -5,6 +5,8 @@ import com.acespade.model.*;
 import com.acespade.model.enums.DisconnectPolicy;
 import com.acespade.model.enums.GameMode;
 import com.acespade.model.enums.GamePhase;
+import com.acespade.model.enums.PokerActionType;
+import com.acespade.model.enums.PokerStreet;
 import com.acespade.rating.TierUtil;
 import com.acespade.repository.GameRecordRepository;
 import com.acespade.repository.GameStateRepository;
@@ -20,6 +22,9 @@ import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -37,12 +42,15 @@ public class RoomService {
     private static final int MIN_PLAYERS = 2;
     private static final int MAX_SPECTATORS = 20;
     private static final int AUTO_PLAY_VOTE_THRESHOLD = 2;
+    /** Pause between poker hands so the result banner is readable. */
+    private static final long POKER_HAND_GAP_MS = 3500;
 
     private final GameStateRepository gameStateRepository;
     private final SessionRepository sessionRepository;
     private final GameRecordRepository gameRecordRepository;
     private final RatingService ratingService;
     private final GameEngine gameEngine;
+    private final PokerEngine pokerEngine;
     private final BotService botService;
     private final DisconnectScheduler disconnectScheduler;
     private final SimpMessagingTemplate messagingTemplate;
@@ -53,6 +61,11 @@ public class RoomService {
     /** roomCode -> playerId the per-turn auto-play timer is currently scheduled for. */
     private final ConcurrentHashMap<String, String> autoPlayScheduledFor = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
+    private final ScheduledExecutorService pokerHandScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "poker-hand-gap");
+        t.setDaemon(true);
+        return t;
+    });
 
     // -------------------------------------------------------------------------
     // REST operations
@@ -66,8 +79,19 @@ public class RoomService {
             throw new IllegalArgumentException("Login required to play");
         }
         String resolvedGameMode = normalizeGameMode(gameMode);
-        if (ranked && GameMode.CLAN_BATTLE.name().equals(resolvedGameMode)) {
-            throw new IllegalArgumentException("Clan Battle cannot be ranked");
+        if (ranked && (GameMode.CLAN_BATTLE.name().equals(resolvedGameMode)
+                || GameMode.POKER.name().equals(resolvedGameMode))) {
+            throw new IllegalArgumentException(
+                    GameMode.POKER.name().equals(resolvedGameMode)
+                            ? "Poker cannot be ranked"
+                            : "Clan Battle cannot be ranked");
+        }
+        if (GameMode.POKER.name().equals(resolvedGameMode)) {
+            if (playWithBot) {
+                throw new IllegalArgumentException("Poker does not support bots");
+            }
+            ranked = false;
+            playWithBot = false;
         }
         if (ranked) {
             if (playWithBot) {
@@ -158,8 +182,8 @@ public class RoomService {
             if (state.isRanked() && userId == null) {
                 throw new IllegalArgumentException("Login required to join ranked games");
             }
-            if (state.getPlayers().size() >= gameEngine.getMaxPlayers()) {
-                throw new IllegalStateException("Room is full (max 8 players)");
+            if (state.getPlayers().size() >= maxPlayersFor(state)) {
+                throw new IllegalStateException("Room is full (max " + maxPlayersFor(state) + " players)");
             }
             username = resolveNickname(username);
             final String resolvedUsername = username;
@@ -457,11 +481,11 @@ public class RoomService {
 
     /** Lists open public rooms — lobby (joinable) and in-progress (spectatable). */
     public List<PublicRoomDto> listPublicRooms() {
-        int maxPlayers = gameEngine.getMaxPlayers();
         return gameStateRepository.findAll().stream()
                 .filter(GameState::isPublicRoom)
                 .filter(s -> s.getPhase() != GamePhase.GAME_END)
                 .filter(s -> {
+                    int maxPlayers = maxPlayersFor(s);
                     if (s.getPhase() == GamePhase.LOBBY) {
                         return s.getPlayers().size() < maxPlayers;
                     }
@@ -470,6 +494,7 @@ public class RoomService {
                 .map(s -> {
                     Player host = s.findPlayer(s.getHostPlayerId());
                     boolean inProgress = s.getPhase() != GamePhase.LOBBY;
+                    int maxPlayers = maxPlayersFor(s);
                     return PublicRoomDto.builder()
                             .roomCode(s.getRoomCode())
                             .hostUsername(host != null ? host.getUsername() : "—")
@@ -702,6 +727,22 @@ public class RoomService {
                     sendError(playerId, "Each team needs at least one player");
                     return;
                 }
+            }
+
+            if (GameMode.POKER.name().equals(state.getGameMode())) {
+                if (state.getPlayers().size() > PokerEngine.MAX_PLAYERS) {
+                    sendError(playerId, "Poker allows at most " + PokerEngine.MAX_PLAYERS + " players");
+                    return;
+                }
+                pokerEngine.initMatch(state);
+                boolean started = pokerEngine.startHand(state);
+                gameStateRepository.save(state);
+                if (!started) {
+                    sendError(playerId, "Not enough players with chips");
+                    return;
+                }
+                broadcastPokerHandStarted(state);
+                return;
             }
 
             state.setRound(1);
@@ -1305,6 +1346,98 @@ public class RoomService {
         }
     }
 
+    public void placePokerAction(String roomCode, String playerId, String actionRaw) {
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        boolean startNext = false;
+        boolean gameOver = false;
+        try {
+            GameState state = getStateOrThrow(roomCode);
+            if (!GameMode.POKER.name().equals(state.getGameMode())) {
+                sendError(playerId, "Not a poker room");
+                return;
+            }
+            try {
+                ensureNotPaused(state, playerId);
+                PokerActionType action = PokerActionType.valueOf(actionRaw.trim().toUpperCase(Locale.ROOT));
+                pokerEngine.applyAction(state, playerId, action);
+            } catch (Exception e) {
+                sendError(playerId, e.getMessage());
+                return;
+            }
+
+            if (state.getPhase() == GamePhase.ROUND_END
+                    || state.getPokerStreet() == PokerStreet.SHOWDOWN) {
+                // Hand finished
+                broadcastPokerUpdate(state, true);
+                Map<String, Object> ended = new LinkedHashMap<>();
+                ended.put("handNumber", state.getRound());
+                ended.put("potAwarded", true);
+                ended.put("lastAction", state.getLastPokerAction());
+                ended.put("scores", new LinkedHashMap<>(state.getScores()));
+                ended.put("poker", pokerEngine.publicTable(state, null, true));
+
+                long withChips = state.getPlayers().stream().filter(p -> p.getChips() > 0).count();
+                if (withChips <= 1) {
+                    state.setPhase(GamePhase.GAME_END);
+                    gameStateRepository.save(state);
+                    Map<String, RatingDeltaDto> ratingUpdates = saveGameRecord(state, null);
+                    ended.put("gameOver", true);
+                    ended.put("winnerUsername", pokerEngine.getWinnerUsername(state));
+                    ended.put("winnerScore", pokerEngine.getWinnerScore(state));
+                    if (ratingUpdates != null) {
+                        ended.put("ratingUpdates", ratingUpdates);
+                    }
+                    broadcast(roomCode, GameEvent.of(GameEvent.EventType.POKER_HAND_ENDED, ended));
+                    broadcast(roomCode, GameEvent.of(GameEvent.EventType.GAME_ENDED, ended));
+                    gameOver = true;
+                } else {
+                    ended.put("gameOver", false);
+                    ended.put("nextHandInMs", POKER_HAND_GAP_MS);
+                    gameStateRepository.save(state);
+                    broadcast(roomCode, GameEvent.of(GameEvent.EventType.POKER_HAND_ENDED, ended));
+                    startNext = true;
+                }
+            } else {
+                gameStateRepository.save(state);
+                broadcastPokerUpdate(state, false);
+            }
+        } finally {
+            lock.unlock();
+        }
+        if (startNext && !gameOver) {
+            pokerHandScheduler.schedule(
+                    () -> startNextPokerHand(roomCode),
+                    POKER_HAND_GAP_MS,
+                    TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private void startNextPokerHand(String roomCode) {
+        ReentrantLock lock = getRoomLock(roomCode);
+        lock.lock();
+        try {
+            GameState state = getStateOrThrow(roomCode);
+            if (!GameMode.POKER.name().equals(state.getGameMode())) return;
+            if (state.getPhase() == GamePhase.GAME_END) return;
+            boolean started = pokerEngine.startHand(state);
+            gameStateRepository.save(state);
+            if (!started) {
+                Map<String, Object> ended = new LinkedHashMap<>();
+                ended.put("gameOver", true);
+                ended.put("winnerUsername", pokerEngine.getWinnerUsername(state));
+                ended.put("winnerScore", pokerEngine.getWinnerScore(state));
+                ended.put("scores", new LinkedHashMap<>(state.getScores()));
+                saveGameRecord(state, null);
+                broadcast(roomCode, GameEvent.of(GameEvent.EventType.GAME_ENDED, ended));
+                return;
+            }
+            broadcastPokerHandStarted(state);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     public void placeBid(String roomCode, String playerId, int amount) {
         ReentrantLock lock = getRoomLock(roomCode);
         lock.lock();
@@ -1425,6 +1558,51 @@ public class RoomService {
         processBotTurns(roomCode);
     }
     // -------------------------------------------------------------------------
+
+    private void broadcastPokerHandStarted(GameState state) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("round", state.getRound());
+        payload.put("handNumber", state.getRound());
+        payload.put("phase", state.getPhase().name());
+        payload.put("players", toPlayerDtoList(state, null, null));
+        payload.put("scores", new LinkedHashMap<>(state.getScores()));
+        payload.put("poker", pokerEngine.publicTable(state, null, false));
+        String turnId = state.getPlayers().get(state.getCurrentPlayerIndex()).getId();
+        payload.put("currentTurnPlayerId", turnId);
+        broadcast(state.getRoomCode(), GameEvent.of(GameEvent.EventType.ROUND_STARTED, payload));
+        broadcastPokerUpdate(state, false);
+
+        for (Player player : state.getPlayers()) {
+            if (player.isBot()) continue;
+            HandUpdate handUpdate = HandUpdate.builder()
+                    .round(state.getRound())
+                    .hand(player.getHand())
+                    .playerId(player.getId())
+                    .build();
+            messagingTemplate.convertAndSendToUser(player.getId(), "/queue/hand", handUpdate);
+        }
+    }
+
+    private void broadcastPokerUpdate(GameState state, boolean revealHands) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("phase", state.getPhase().name());
+        payload.put("round", state.getRound());
+        payload.put("scores", new LinkedHashMap<>(state.getScores()));
+        payload.put("players", toPlayerDtoList(state,
+                state.getPhase() == GamePhase.POKER_HAND
+                        && state.getPokerStreet() != PokerStreet.SHOWDOWN
+                        ? state.getPlayers().get(state.getCurrentPlayerIndex()).getId()
+                        : null,
+                null));
+        payload.put("poker", pokerEngine.publicTable(state, null, revealHands));
+        if (state.getPhase() == GamePhase.POKER_HAND
+                && state.getPokerStreet() != PokerStreet.SHOWDOWN
+                && !state.getPlayers().isEmpty()) {
+            payload.put("currentTurnPlayerId",
+                    state.getPlayers().get(state.getCurrentPlayerIndex()).getId());
+        }
+        broadcast(state.getRoomCode(), GameEvent.of(GameEvent.EventType.POKER_UPDATE, payload));
+    }
 
     private void broadcastRoomUpdate(GameState state) {
         broadcast(state.getRoomCode(),
@@ -1559,8 +1737,12 @@ public class RoomService {
                 scoresJson = objectMapper.writeValueAsString(usernameScores);
             }
 
-            String winnerUsername = gameEngine.getWinnerUsername(state);
-            int winnerScore = gameEngine.getWinnerScore(state);
+            String winnerUsername = GameMode.POKER.name().equals(state.getGameMode())
+                    ? pokerEngine.getWinnerUsername(state)
+                    : gameEngine.getWinnerUsername(state);
+            int winnerScore = GameMode.POKER.name().equals(state.getGameMode())
+                    ? pokerEngine.getWinnerScore(state)
+                    : gameEngine.getWinnerScore(state);
 
             GameRecord record = GameRecord.builder()
                     .roomCode(state.getRoomCode())
@@ -1587,6 +1769,9 @@ public class RoomService {
                 }
                 return ratingService.processRankedGame(record, state.getPlayers(), state.getScores());
             }
+
+            // Unranked modes (Clan / Poker): still write per-player history rows (no MMR).
+            ratingService.recordUnrankedPlayers(record, state.getPlayers(), state.getScores());
             return null;
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize game record for room {}", state.getRoomCode(), e);
@@ -1702,6 +1887,9 @@ public class RoomService {
     }
 
     private static int resolveLobbyMaxRounds(boolean ranked, String gameMode, int maxRounds) {
+        if (GameMode.POKER.name().equals(gameMode)) {
+            return 999;
+        }
         if (ranked) {
             return clampRankedMaxRounds(maxRounds);
         }
@@ -1711,9 +1899,19 @@ public class RoomService {
         return TierUtil.CASUAL_MAX_ROUNDS;
     }
 
+    private static int maxPlayersFor(GameState state) {
+        if (GameMode.POKER.name().equals(state.getGameMode())) {
+            return PokerEngine.MAX_PLAYERS;
+        }
+        return 8;
+    }
+
     private static int normalizeStoredMaxRounds(int maxRounds) {
         if (maxRounds == 5) {
             return 5;
+        }
+        if (maxRounds >= 999) {
+            return 999;
         }
         return clampRankedMaxRounds(maxRounds);
     }
@@ -1777,6 +1975,12 @@ public class RoomService {
                 .teamScores(computeTeamScores(state))
                 .team1Name(state.getTeam1Name())
                 .team2Name(state.getTeam2Name())
+                .poker(GameMode.POKER.name().equals(state.getGameMode())
+                        ? pokerEngine.publicTable(state, viewerPlayerId,
+                        state.getPokerStreet() == PokerStreet.SHOWDOWN
+                                || state.getPhase() == GamePhase.ROUND_END
+                                || state.getPhase() == GamePhase.GAME_END)
+                        : null)
                 .build();
     }
 
@@ -1976,6 +2180,10 @@ public class RoomService {
                 .tier(p.isBot() ? null : ratingService.tierBadgeForUser(
                         p.getUserId(),
                         state.getGameMode() != null ? state.getGameMode() : GameMode.CLASSIC.name()))
+                .chips(GameMode.POKER.name().equals(state.getGameMode()) ? p.getChips() : null)
+                .betThisStreet(GameMode.POKER.name().equals(state.getGameMode()) ? p.getBetThisStreet() : null)
+                .folded(GameMode.POKER.name().equals(state.getGameMode()) && p.isFolded())
+                .allIn(GameMode.POKER.name().equals(state.getGameMode()) && p.isAllIn())
                 .build();
         }).collect(Collectors.toList());
     }
