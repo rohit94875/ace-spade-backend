@@ -11,4 +11,6 @@ public class SeasonRewardWinnerDto {
     private Long userId;
     private String username;
     private Double statValue;
+    /** CLASSIC or RUTHLESS_HIDDEN */
+    private String gameMode;
 }

@@ -1,14 +1,14 @@
 package com.acespade.service;
 
+import com.acespade.domain.GameRecordPlayer;
 import com.acespade.domain.PlayerRating;
 import com.acespade.domain.SeasonPlayerStats;
 import com.acespade.domain.SeasonReward;
-import com.acespade.rating.RewardSymbolUtil;
-import com.acespade.rating.TierUtil;
+import com.acespade.model.GameRecord;
 import com.acespade.model.enums.GameMode;
 import com.acespade.model.enums.RewardSymbolType;
-import com.acespade.domain.GameRecordPlayer;
-import com.acespade.model.GameRecord;
+import com.acespade.rating.RewardSymbolUtil;
+import com.acespade.rating.TierUtil;
 import com.acespade.repository.GameRecordPlayerRepository;
 import com.acespade.repository.GameRecordRepository;
 import com.acespade.repository.PlayerRatingRepository;
@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -36,14 +37,16 @@ public class SeasonRewardService {
     private final GameRecordPlayerRepository gameRecordPlayerRepository;
 
     @Transactional
-    public void recordRankedClassicResult(int seasonId, Long userId, boolean won, double mmrAfter) {
+    public void recordRankedResult(int seasonId, Long userId, String gameMode, boolean won, double mmrAfter) {
+        String mode = GameMode.normalizeRankedMode(gameMode);
+        GameMode modeEnum = GameMode.parse(mode);
         SeasonPlayerStats stats = statsRepository
-                .findBySeasonIdAndUserIdAndGameMode(seasonId, userId, GameMode.CLASSIC)
+                .findBySeasonIdAndUserIdAndGameMode(seasonId, userId, modeEnum)
                 .orElseGet(() -> {
                     SeasonPlayerStats s = new SeasonPlayerStats();
                     s.setSeasonId(seasonId);
                     s.setUserId(userId);
-                    s.setGameMode(GameMode.CLASSIC);
+                    s.setGameMode(modeEnum);
                     return s;
                 });
         stats.setMatchesPlayed(stats.getMatchesPlayed() + 1);
@@ -61,27 +64,39 @@ public class SeasonRewardService {
         }
         stats.setFinalMmr(mmrAfter);
         statsRepository.save(stats);
+        log.debug("operation=recordRankedResult feature=season-rewards-modes status=exit seasonId={} userId={} gameMode={} won={}",
+                seasonId, userId, mode, won);
+    }
+
+    /** @deprecated use {@link #recordRankedResult} */
+    @Transactional
+    public void recordRankedClassicResult(int seasonId, Long userId, boolean won, double mmrAfter) {
+        recordRankedResult(seasonId, userId, GameMode.CLASSIC.name(), won, mmrAfter);
     }
 
     @Transactional
     public void finalizeSeasonRewards(int seasonId) {
-        backfillSeasonStatsIfNeeded(seasonId);
-        computeAndPersistRewards(seasonId);
+        for (GameMode mode : GameMode.rankedModes()) {
+            backfillSeasonStatsIfNeeded(seasonId, mode);
+            computeAndPersistRewards(seasonId, mode.name());
+        }
     }
 
-    /** Rebuild season_player_stats from ranked game_records when live tracking was off. */
     @Transactional
-    public void backfillSeasonStatsIfNeeded(int seasonId) {
-        if (!statsRepository.findBySeasonIdAndGameMode(seasonId, GameMode.CLASSIC).isEmpty()) {
+    public void backfillSeasonStatsIfNeeded(int seasonId, GameMode mode) {
+        if (!statsRepository.findBySeasonIdAndGameMode(seasonId, mode).isEmpty()) {
             return;
         }
         List<GameRecord> games = gameRecordRepository.findBySeasonIdAndRankedTrueOrderByPlayedAtAsc(seasonId);
-        if (games.isEmpty()) {
-            log.info("operation=backfillSeasonStats feature=season-rewards seasonId={} status=skip no ranked games",
-                    seasonId);
+        List<GameRecord> modeGames = games.stream()
+                .filter(g -> GameMode.normalizeRankedMode(g.getGameMode()).equals(mode.name()))
+                .collect(Collectors.toList());
+        if (modeGames.isEmpty()) {
+            log.info("operation=backfillSeasonStats feature=season-rewards-modes seasonId={} gameMode={} status=skip no ranked games",
+                    seasonId, mode);
             return;
         }
-        for (GameRecord game : games) {
+        for (GameRecord game : modeGames) {
             List<GameRecordPlayer> players = gameRecordPlayerRepository.findByGameRecordId(game.getId());
             for (GameRecordPlayer grp : players) {
                 if (grp.getUserId() == null) {
@@ -89,57 +104,63 @@ public class SeasonRewardService {
                 }
                 boolean won = grp.getUsername().equals(game.getWinnerUsername());
                 double mmrAfter = grp.getRatingAfter() != null ? grp.getRatingAfter() : 0;
-                recordRankedClassicResult(seasonId, grp.getUserId(), won, mmrAfter);
+                recordRankedResult(seasonId, grp.getUserId(), mode.name(), won, mmrAfter);
             }
         }
-        log.info("operation=backfillSeasonStats feature=season-rewards seasonId={} status=exit games={}",
-                seasonId, games.size());
+        log.info("operation=backfillSeasonStats feature=season-rewards-modes seasonId={} gameMode={} status=exit games={}",
+                seasonId, mode, modeGames.size());
     }
 
     @Transactional
-    public void computeAndPersistRewards(int seasonId) {
-        List<SeasonPlayerStats> stats = statsRepository.findBySeasonIdAndGameMode(seasonId, GameMode.CLASSIC);
+    public void computeAndPersistRewards(int seasonId, String gameMode) {
+        String mode = GameMode.normalizeRankedMode(gameMode);
+        GameMode modeEnum = GameMode.parse(mode);
+        List<SeasonPlayerStats> stats = statsRepository.findBySeasonIdAndGameMode(seasonId, modeEnum);
         for (SeasonPlayerStats s : stats) {
             if (!eligibleForRewards(s)) {
                 continue;
             }
-            double finalMmr = finalMmrForTierCard(seasonId, s);
+            double finalMmr = finalMmrForTierCard(seasonId, s, mode);
             RewardSymbolType tierCard = tierCardForMmr(finalMmr);
             if (tierCard == null) {
                 continue;
             }
-            upsertTierCard(seasonId, s.getUserId(), tierCard, finalMmr);
+            upsertTierCard(seasonId, mode, s.getUserId(), tierCard, finalMmr);
         }
         List<SeasonPlayerStats> eligible = stats.stream()
                 .filter(SeasonRewardService::eligibleForRewards)
-                .collect(java.util.stream.Collectors.toList());
-        awardTopIfMissing(seasonId, eligible, RewardSymbolType.MOST_MATCHES,
+                .collect(Collectors.toList());
+        awardTopIfMissing(seasonId, mode, eligible, RewardSymbolType.MOST_MATCHES,
                 Comparator.comparingInt(SeasonPlayerStats::getMatchesPlayed));
-        awardTopIfMissing(seasonId, eligible, RewardSymbolType.MOST_WINS,
+        awardTopIfMissing(seasonId, mode, eligible, RewardSymbolType.MOST_WINS,
                 Comparator.comparingInt(SeasonPlayerStats::getWins));
-        awardTopIfMissing(seasonId, eligible, RewardSymbolType.MOST_LOSSES,
+        awardTopIfMissing(seasonId, mode, eligible, RewardSymbolType.MOST_LOSSES,
                 Comparator.comparingInt(SeasonPlayerStats::getLosses));
-        awardTopIfMissing(seasonId, eligible, RewardSymbolType.WIN_STREAK,
+        awardTopIfMissing(seasonId, mode, eligible, RewardSymbolType.WIN_STREAK,
                 Comparator.comparingInt(SeasonPlayerStats::getMaxWinStreak));
-        awardTopIfMissing(seasonId, eligible, RewardSymbolType.LOSS_STREAK,
+        awardTopIfMissing(seasonId, mode, eligible, RewardSymbolType.LOSS_STREAK,
                 Comparator.comparingInt(SeasonPlayerStats::getMaxLossStreak));
-        awardTopIfMissing(seasonId, eligible, RewardSymbolType.FINISHER,
+        awardTopIfMissing(seasonId, mode, eligible, RewardSymbolType.FINISHER,
                 Comparator.comparingInt(SeasonPlayerStats::getFinishes));
 
-        if (!rewardRepository.findBySeasonIdAndSymbolType(seasonId, RewardSymbolType.TOP_MMR).isPresent()) {
+        if (!rewardRepository.findBySeasonIdAndGameModeAndSymbolType(
+                seasonId, mode, RewardSymbolType.TOP_MMR).isPresent()) {
             List<PlayerRating> ratings = playerRatingRepository.findBySeasonIdAndGameModeOrderByRatingDesc(
-                    seasonId, GameMode.CLASSIC.name(), PageRequest.of(0, 50));
+                    seasonId, mode, PageRequest.of(0, 50));
             ratings.stream()
                     .filter(pr -> pr.getGamesPlayed() >= TierUtil.PLACEMENT_GAMES_REQUIRED)
                     .findFirst()
-                    .ifPresent(top -> saveReward(seasonId, top.getUserId(), RewardSymbolType.TOP_MMR, top.getRating()));
+                    .ifPresent(top -> saveReward(seasonId, mode, top.getUserId(),
+                            RewardSymbolType.TOP_MMR, top.getRating()));
         }
-        log.info("operation=computeAndPersistRewards feature=season-rewards seasonId={} status=exit", seasonId);
+        log.info("operation=computeAndPersistRewards feature=season-rewards-modes seasonId={} gameMode={} status=exit",
+                seasonId, mode);
     }
 
-    private void upsertTierCard(int seasonId, Long userId, RewardSymbolType tierCard, double finalMmr) {
-        Optional<SeasonReward> existing = rewardRepository.findBySeasonIdAndUserId(seasonId, userId).stream()
-                .filter(r -> RewardSymbolUtil.isTierCard(r.getSymbolType()))
+    private void upsertTierCard(int seasonId, String gameMode, Long userId,
+                                RewardSymbolType tierCard, double finalMmr) {
+        Optional<SeasonReward> existing = rewardRepository.findBySeasonIdAndGameMode(seasonId, gameMode).stream()
+                .filter(r -> r.getUserId().equals(userId) && RewardSymbolUtil.isTierCard(r.getSymbolType()))
                 .findFirst();
         if (existing.isPresent()) {
             SeasonReward reward = existing.get();
@@ -151,26 +172,21 @@ public class SeasonRewardService {
             }
             return;
         }
-        saveReward(seasonId, userId, tierCard, finalMmr);
+        saveReward(seasonId, gameMode, userId, tierCard, finalMmr);
     }
 
-    private void awardTopIfMissing(int seasonId, List<SeasonPlayerStats> stats, RewardSymbolType symbol,
-                                   Comparator<SeasonPlayerStats> comparator) {
-        if (rewardRepository.findBySeasonIdAndSymbolType(seasonId, symbol).isPresent()) {
+    private void awardTopIfMissing(int seasonId, String gameMode, List<SeasonPlayerStats> stats,
+                                   RewardSymbolType symbol, Comparator<SeasonPlayerStats> comparator) {
+        if (rewardRepository.findBySeasonIdAndGameModeAndSymbolType(seasonId, gameMode, symbol).isPresent()) {
             return;
         }
-        awardTop(seasonId, stats, symbol, comparator);
-    }
-
-    private void awardTop(int seasonId, List<SeasonPlayerStats> stats, RewardSymbolType symbol,
-                          Comparator<SeasonPlayerStats> comparator) {
         Optional<SeasonPlayerStats> top = stats.stream()
                 .filter(s -> eligibleForRewards(s) && statValueFor(symbol, s) > 0)
                 .max(comparator);
         top.ifPresent(s -> {
             double value = statValueFor(symbol, s);
             if (value > 0) {
-                saveReward(seasonId, s.getUserId(), symbol, value);
+                saveReward(seasonId, gameMode, s.getUserId(), symbol, value);
             }
         });
     }
@@ -187,23 +203,24 @@ public class SeasonRewardService {
         }
     }
 
-    private void saveReward(int seasonId, Long userId, RewardSymbolType symbol, double value) {
+    private void saveReward(int seasonId, String gameMode, Long userId,
+                            RewardSymbolType symbol, double value) {
         SeasonReward reward = new SeasonReward();
         reward.setSeasonId(seasonId);
         reward.setUserId(userId);
+        reward.setGameMode(gameMode);
         reward.setSymbolType(symbol);
         reward.setStatValue(value);
         rewardRepository.save(reward);
     }
 
-    private double finalMmrForTierCard(int seasonId, SeasonPlayerStats stats) {
+    private double finalMmrForTierCard(int seasonId, SeasonPlayerStats stats, String gameMode) {
         return playerRatingRepository
-                .findByUserIdAndSeasonIdAndGameMode(stats.getUserId(), seasonId, GameMode.CLASSIC.name())
+                .findByUserIdAndSeasonIdAndGameMode(stats.getUserId(), seasonId, gameMode)
                 .map(PlayerRating::getRating)
                 .orElse(stats.getFinalMmr());
     }
 
-    /** Tier card matches badge family (Gold 3 at 1546 → Gold Card, not Silver). */
     static RewardSymbolType tierCardForMmr(double mmr) {
         String tier = TierUtil.tierForMmr(mmr);
         if (tier.startsWith("Please") || tier.startsWith("Sand")) {

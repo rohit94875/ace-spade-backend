@@ -1979,7 +1979,9 @@ public class RoomService {
                 .autoPlayCount(p.getAutoPlayCount())
                 .ready(p.isReady())
                 .teamId(p.getTeamId())
-                .tier(p.isBot() ? null : ratingService.tierBadgeForUser(p.getUserId()))
+                .tier(p.isBot() ? null : ratingService.tierBadgeForUser(
+                        p.getUserId(),
+                        state.getGameMode() != null ? state.getGameMode() : GameMode.CLASSIC.name()))
                 .build();
         }).collect(Collectors.toList());
     }

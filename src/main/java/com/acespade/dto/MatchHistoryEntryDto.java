@@ -27,5 +27,6 @@ public class MatchHistoryEntryDto {
     private int placement;
     private String winnerUsername;
     private int winnerScore;
+    private String gameMode;
     private List<OpponentScoreDto> opponents;
 }
