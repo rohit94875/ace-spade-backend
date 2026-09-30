@@ -53,6 +53,9 @@ public class Player implements Serializable {
     @Builder.Default
     private boolean ready = false;
 
+    /** Clan Battle: 1 = team blue, 2 = team red. */
+    private Integer teamId;
+
     public void resetForRound() {
         this.hand = new ArrayList<>();
         this.bid = null;

@@ -50,4 +50,8 @@ public class GameRecord {
     @Column(name = "season_id", nullable = false)
     @Builder.Default
     private int seasonId = 1;
+
+    @Column(name = "game_mode", nullable = false, length = 20)
+    @Builder.Default
+    private String gameMode = "CLASSIC";
 }

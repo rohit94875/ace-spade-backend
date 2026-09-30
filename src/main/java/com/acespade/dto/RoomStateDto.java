@@ -33,4 +33,9 @@ public class RoomStateDto {
     private List<SpectatorDto> spectators;
     /** targetPlayerId -> list of voter playerIds */
     private Map<String, List<String>> botVotes;
+    private String gameMode;
+    /** Clan Battle cumulative team scores keyed "1" and "2". */
+    private Map<String, Integer> teamScores;
+    private String team1Name;
+    private String team2Name;
 }

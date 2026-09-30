@@ -34,6 +34,7 @@ public class RoomController {
                 request.isRanked(),
                 request.getMaxRounds(),
                 request.isPublicRoom(),
+                request.getGameMode(),
                 user.getId()));
     }
 
@@ -102,6 +103,19 @@ public class RoomController {
             return ResponseEntity.ok(roomService.getRoomState(code.toUpperCase()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.notFound().build();
+        }
+    }
+
+    @PatchMapping("/{code}/settings")
+    public ResponseEntity<?> updateSettings(@PathVariable String code,
+                                            @RequestHeader("X-Session-Token") String sessionToken,
+                                            @Valid @RequestBody RoomSettingsRequest request) {
+        try {
+            String playerId = roomService.resolvePlayerIdFromSession(sessionToken.trim(), code.toUpperCase());
+            return ResponseEntity.ok(roomService.updateRoomSettings(
+                    code.toUpperCase(), playerId, request));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
 

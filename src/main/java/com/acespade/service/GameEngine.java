@@ -1,6 +1,7 @@
 package com.acespade.service;
 
 import com.acespade.model.*;
+import com.acespade.model.enums.GameMode;
 import com.acespade.rating.TierUtil;
 import com.acespade.model.enums.GamePhase;
 import com.acespade.model.enums.Rank;
@@ -213,15 +214,17 @@ public class GameEngine {
     }
 
     private GameState endRound(GameState state) {
-        // Calculate scores
-        for (Player player : state.getPlayers()) {
-            int roundScore = (player.getBid() != null && player.getTricksWon() == player.getBid())
-                    ? calculateRoundScore(player.getBid())
-                    : 0;
-            state.getScores().merge(player.getId(), roundScore, Integer::sum);
+        if (isClanBattle(state)) {
+            endClanRound(state);
+        } else {
+            for (Player player : state.getPlayers()) {
+                int roundScore = calculateRoundScore(state, player);
+                state.getScores().merge(player.getId(), roundScore, Integer::sum);
+            }
         }
 
-        log.debug("Round {} ended. Scores: {}", state.getRound(), state.getScores());
+        log.debug("Round {} ended. Scores: {} teamScores: {}",
+                state.getRound(), state.getScores(), state.getTeamScores());
 
         if (state.getRound() == effectiveMaxRounds(state)) {
             state.setPhase(GamePhase.GAME_END);
@@ -234,12 +237,41 @@ public class GameEngine {
     }
 
     /**
-     * Scoring formula:
+     * Classic scoring formula:
      *   bid == 0 → 10 pts
      *   bid N   → 10 + (N * 11) pts
      */
-    public int calculateRoundScore(int bid) {
+    public int calculateClassicRoundScore(int bid) {
         return bid == 0 ? 10 : 10 + (bid * 11);
+    }
+
+    /** @deprecated use {@link #calculateClassicRoundScore(int)} */
+    public int calculateRoundScore(int bid) {
+        return calculateClassicRoundScore(bid);
+    }
+
+    public int calculateRoundScore(GameState state, Player player) {
+        if (player.getBid() == null) {
+            return 0;
+        }
+        if (GameMode.RUTHLESS_HIDDEN.name().equals(state.getGameMode())) {
+            return calculateRuthlessRoundScore(player);
+        }
+        if (player.getTricksWon() == player.getBid()) {
+            return calculateClassicRoundScore(player.getBid());
+        }
+        return 0;
+    }
+
+    /**
+     * Ruthless: exact bid uses classic points; miss is the negative of the hit value
+     * (e.g. bid 1 → +21 if exact, -21 if missed).
+     */
+    public int calculateRuthlessRoundScore(Player player) {
+        int bid = player.getBid();
+        int won = player.getTricksWon();
+        int hitValue = calculateClassicRoundScore(bid);
+        return won == bid ? hitValue : -hitValue;
     }
 
     private List<Card> createShuffledDoubleDeck() {
@@ -278,12 +310,82 @@ public class GameEngine {
     // -------------------------------------------------------------------------
 
     public Map<String, Integer> getRoundScores(GameState state) {
+        if (isClanBattle(state)) {
+            return state.getPlayers().stream().collect(Collectors.toMap(
+                    Player::getId,
+                    p -> 0
+            ));
+        }
         return state.getPlayers().stream().collect(Collectors.toMap(
                 Player::getId,
-                p -> (p.getBid() != null && p.getTricksWon() == p.getBid().intValue())
-                        ? calculateRoundScore(p.getBid())
-                        : 0
+                p -> calculateRoundScore(state, p)
         ));
+    }
+
+    public Map<String, Integer> getClanTeamRoundScores(GameState state) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        for (int teamId : new int[]{1, 2}) {
+            int teamBid = sumTeamBids(state, teamId);
+            int teamTricks = sumTeamTricks(state, teamId);
+            int roundScore = teamTricks == teamBid ? calculateClassicRoundScore(teamBid) : 0;
+            result.put(String.valueOf(teamId), roundScore);
+        }
+        return result;
+    }
+
+    public Map<String, Integer> getClanTeamBids(GameState state) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        for (int teamId : new int[]{1, 2}) {
+            result.put(String.valueOf(teamId), sumTeamBids(state, teamId));
+        }
+        return result;
+    }
+
+    public Map<String, Integer> getClanTeamTricks(GameState state) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        for (int teamId : new int[]{1, 2}) {
+            result.put(String.valueOf(teamId), sumTeamTricks(state, teamId));
+        }
+        return result;
+    }
+
+    public void initClanTeamScores(GameState state) {
+        if (!isClanBattle(state)) {
+            return;
+        }
+        if (state.getTeamScores() == null) {
+            state.setTeamScores(new LinkedHashMap<>());
+        }
+        state.getTeamScores().putIfAbsent("1", 0);
+        state.getTeamScores().putIfAbsent("2", 0);
+    }
+
+    private void endClanRound(GameState state) {
+        initClanTeamScores(state);
+        for (int teamId : new int[]{1, 2}) {
+            int teamBid = sumTeamBids(state, teamId);
+            int teamTricks = sumTeamTricks(state, teamId);
+            int roundScore = teamTricks == teamBid ? calculateClassicRoundScore(teamBid) : 0;
+            state.getTeamScores().merge(String.valueOf(teamId), roundScore, Integer::sum);
+        }
+    }
+
+    private int sumTeamBids(GameState state, int teamId) {
+        return state.getPlayers().stream()
+                .filter(p -> p.getTeamId() != null && p.getTeamId() == teamId)
+                .mapToInt(p -> p.getBid() != null ? p.getBid() : 0)
+                .sum();
+    }
+
+    private int sumTeamTricks(GameState state, int teamId) {
+        return state.getPlayers().stream()
+                .filter(p -> p.getTeamId() != null && p.getTeamId() == teamId)
+                .mapToInt(Player::getTricksWon)
+                .sum();
+    }
+
+    private boolean isClanBattle(GameState state) {
+        return GameMode.CLAN_BATTLE.name().equals(state.getGameMode());
     }
 
     public Map<String, Integer> getBids(GameState state) {
@@ -298,6 +400,9 @@ public class GameEngine {
     }
 
     public String getWinnerUsername(GameState state) {
+        if (isClanBattle(state)) {
+            return getWinningTeamName(state);
+        }
         return state.getPlayers().stream()
                 .max(Comparator.comparingInt(p -> state.getScores().getOrDefault(p.getId(), 0)))
                 .map(Player::getUsername)
@@ -305,9 +410,25 @@ public class GameEngine {
     }
 
     public int getWinnerScore(GameState state) {
+        if (isClanBattle(state)) {
+            initClanTeamScores(state);
+            return Math.max(
+                    state.getTeamScores().getOrDefault("1", 0),
+                    state.getTeamScores().getOrDefault("2", 0));
+        }
         return state.getScores().values().stream()
                 .max(Integer::compareTo)
                 .orElse(0);
+    }
+
+    private String getWinningTeamName(GameState state) {
+        initClanTeamScores(state);
+        int team1 = state.getTeamScores().getOrDefault("1", 0);
+        int team2 = state.getTeamScores().getOrDefault("2", 0);
+        if (team2 > team1) {
+            return state.getTeam2Name() != null ? state.getTeam2Name() : "Red Clan";
+        }
+        return state.getTeam1Name() != null ? state.getTeam1Name() : "Blue Clan";
     }
 
     public int getMaxPlayers() {

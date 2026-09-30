@@ -31,6 +31,7 @@ public class GameEvent {
         PLAYER_READY,
         BOT_VOTE_UPDATED,
         SPECTATOR_JOINED,
+        PLAYER_KICKED,
         ERROR
     }
 

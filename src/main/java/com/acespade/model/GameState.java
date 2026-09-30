@@ -66,6 +66,10 @@ public class GameState implements Serializable {
     @Builder.Default
     private Map<String, Integer> scores = new HashMap<>();
 
+    /** Clan Battle only: teamId ("1", "2") → cumulative team score. */
+    @Builder.Default
+    private Map<String, Integer> teamScores = new HashMap<>();
+
     /** Room option: play vs BOT Vitality from lobby (host + bot). */
     @Builder.Default
     private boolean playWithBot = false;
@@ -81,6 +85,15 @@ public class GameState implements Serializable {
     /** Room option: what happens when a human leaves mid-game. */
     @Builder.Default
     private DisconnectPolicy disconnectPolicy = DisconnectPolicy.FORFEIT_WIN;
+
+    @Builder.Default
+    private String gameMode = "CLASSIC";
+
+    @Builder.Default
+    private String team1Name = "Blue Clan";
+
+    @Builder.Default
+    private String team2Name = "Red Clan";
 
     /** Solo bot games only: game frozen until human resumes. */
     @Builder.Default

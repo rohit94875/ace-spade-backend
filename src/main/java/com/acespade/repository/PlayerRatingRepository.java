@@ -9,6 +9,8 @@ import java.util.Optional;
 
 public interface PlayerRatingRepository extends JpaRepository<PlayerRating, Long> {
     Optional<PlayerRating> findByUserIdAndSeasonId(Long userId, int seasonId);
+    Optional<PlayerRating> findByUserIdAndSeasonIdAndGameMode(Long userId, int seasonId, String gameMode);
     List<PlayerRating> findBySeasonIdOrderByRatingDesc(int seasonId, Pageable pageable);
+    List<PlayerRating> findBySeasonIdAndGameModeOrderByRatingDesc(int seasonId, String gameMode, Pageable pageable);
     long countBySeasonIdAndPlacementGamesGreaterThanEqual(int seasonId, int minPlacement);
 }

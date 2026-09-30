@@ -1,10 +1,10 @@
-FROM eclipse-temurin:8-jdk AS build
+# Use the Gradle image so the build does not download the wrapper distro (slow on homelab networks).
+FROM gradle:7.6.4-jdk8 AS build
 WORKDIR /app
-COPY gradle/ gradle/
-COPY gradlew gradlew.bat build.gradle settings.gradle ./
-RUN chmod +x gradlew && ./gradlew dependencies --no-daemon -q || true
+COPY build.gradle settings.gradle ./
+RUN gradle dependencies --no-daemon -q
 COPY src ./src
-RUN ./gradlew bootJar --no-daemon -x test
+RUN gradle bootJar --no-daemon -x test
 
 FROM eclipse-temurin:8-jre
 WORKDIR /app
