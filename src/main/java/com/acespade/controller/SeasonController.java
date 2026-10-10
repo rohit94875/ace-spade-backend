@@ -1,6 +1,7 @@
 package com.acespade.controller;
 
 import com.acespade.dto.*;
+import com.acespade.model.enums.GameMode;
 import com.acespade.security.AuthUser;
 import com.acespade.service.RatingService;
 import com.acespade.service.SeasonService;
@@ -57,11 +58,16 @@ public class SeasonController {
     }
 
     @GetMapping("/{id}/leaderboard")
-    public ResponseEntity<List<LeaderboardEntryDto>> seasonLeaderboard(
+    public ResponseEntity<?> seasonLeaderboard(
             @PathVariable int id,
-            @RequestParam(defaultValue = "50") int limit) {
-        return ResponseEntity.ok(ratingService.getLeaderboardForSeason(
-                id, SeasonService.CLASSIC_MODE, limit));
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(defaultValue = "CLASSIC") String gameMode) {
+        try {
+            return ResponseEntity.ok(ratingService.getLeaderboardForSeason(
+                    id, GameMode.requireRankedMode(gameMode), limit));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(errorBody(e.getMessage()));
+        }
     }
 
     @GetMapping("/{id}/rewards/me")

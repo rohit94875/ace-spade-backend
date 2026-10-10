@@ -2,6 +2,7 @@ package com.acespade.model;
 
 import com.acespade.model.enums.DisconnectPolicy;
 import com.acespade.model.enums.GamePhase;
+import com.acespade.model.enums.PokerStreet;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -112,6 +113,50 @@ public class GameState implements Serializable {
     /** targetPlayerId -> voter playerIds for vote-to-bot. */
     @Builder.Default
     private Map<String, Set<String>> botVotes = new HashMap<>();
+
+    // ---- Poker (Texas Hold'em fixed-limit lite) ----
+
+    @Builder.Default
+    private PokerStreet pokerStreet = PokerStreet.PREFLOP;
+
+    @Builder.Default
+    private List<Card> communityCards = new ArrayList<>();
+
+    @Builder.Default
+    private List<Card> pokerDeck = new ArrayList<>();
+
+    @Builder.Default
+    private int pot = 0;
+
+    /** Amount each active player must match this street. */
+    @Builder.Default
+    private int currentBet = 0;
+
+    @Builder.Default
+    private int dealerIndex = 0;
+
+    @Builder.Default
+    private int smallBlind = 25;
+
+    @Builder.Default
+    private int bigBlind = 50;
+
+    @Builder.Default
+    private int betUnit = 50;
+
+    /** Raises already made this street (fixed-limit cap). */
+    @Builder.Default
+    private int raisesThisStreet = 0;
+
+    @Builder.Default
+    private int maxRaisesPerStreet = 3;
+
+    /** Poker: small / big blind seats for this hand. */
+    private String smallBlindPlayerId;
+    private String bigBlindPlayerId;
+
+    /** Last poker action description for UI feed. */
+    private String lastPokerAction;
 
     public Player findPlayer(String playerId) {
         return players.stream()

@@ -7,7 +7,7 @@ import java.time.Instant;
 
 @Entity
 @Table(name = "season_rewards",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"season_id", "user_id", "symbol_type"}))
+        uniqueConstraints = @UniqueConstraint(columnNames = {"season_id", "user_id", "game_mode", "symbol_type"}))
 public class SeasonReward {
 
     @Id
@@ -19,6 +19,9 @@ public class SeasonReward {
 
     @Column(name = "user_id", nullable = false)
     private Long userId;
+
+    @Column(name = "game_mode", nullable = false, length = 20, columnDefinition = "varchar(20) not null default 'CLASSIC'")
+    private String gameMode = "CLASSIC";
 
     @Enumerated(EnumType.STRING)
     @Column(name = "symbol_type", nullable = false, length = 30)
@@ -36,6 +39,8 @@ public class SeasonReward {
     public void setSeasonId(int seasonId) { this.seasonId = seasonId; }
     public Long getUserId() { return userId; }
     public void setUserId(Long userId) { this.userId = userId; }
+    public String getGameMode() { return gameMode; }
+    public void setGameMode(String gameMode) { this.gameMode = gameMode; }
     public RewardSymbolType getSymbolType() { return symbolType; }
     public void setSymbolType(RewardSymbolType symbolType) { this.symbolType = symbolType; }
     public Double getStatValue() { return statValue; }

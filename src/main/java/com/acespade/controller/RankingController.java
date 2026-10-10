@@ -3,6 +3,7 @@ package com.acespade.controller;
 import com.acespade.dto.LeaderboardEntryDto;
 import com.acespade.dto.MatchHistoryEntryDto;
 import com.acespade.dto.UserProfileDto;
+import com.acespade.model.enums.GameMode;
 import com.acespade.security.AuthUser;
 import com.acespade.service.AuthService;
 import com.acespade.service.RatingService;
@@ -33,9 +34,15 @@ public class RankingController {
     }
 
     @GetMapping("/leaderboard")
-    public ResponseEntity<List<LeaderboardEntryDto>> leaderboard(
-            @RequestParam(defaultValue = "50") int limit) {
-        return ResponseEntity.ok(ratingService.getLeaderboard(limit));
+    public ResponseEntity<?> leaderboard(
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(defaultValue = "CLASSIC") String gameMode) {
+        try {
+            return ResponseEntity.ok(ratingService.getLeaderboard(
+                    GameMode.requireRankedMode(gameMode), limit));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(errorBody(e.getMessage()));
+        }
     }
 
     @GetMapping("/history/me")

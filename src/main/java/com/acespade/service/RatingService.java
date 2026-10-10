@@ -7,6 +7,7 @@ import com.acespade.domain.User;
 import com.acespade.dto.*;
 import com.acespade.model.GameRecord;
 import com.acespade.model.Player;
+import com.acespade.model.enums.GameMode;
 import com.acespade.rating.Glicko2Calculator;
 import com.acespade.rating.GlickoRating;
 import com.acespade.rating.TierUtil;
@@ -16,6 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -49,14 +51,25 @@ public class RatingService {
     }
 
     public PlayerRating getOrCreateRating(Long userId) {
+        return getOrCreateRating(userId, CLASSIC_MODE);
+    }
+
+    public PlayerRating getOrCreateRating(Long userId, String gameMode) {
         int seasonId = seasonService.getRankedSeasonId();
-        return playerRatingRepository.findByUserIdAndSeasonIdAndGameMode(userId, seasonId, CLASSIC_MODE)
+        String mode = GameMode.normalizeRankedMode(gameMode);
+        return playerRatingRepository.findByUserIdAndSeasonIdAndGameMode(userId, seasonId, mode)
                 .orElseGet(() -> {
-                    PlayerRating rating = new PlayerRating();
-                    rating.setUserId(userId);
-                    rating.setSeasonId(seasonId);
-                    rating.setGameMode(CLASSIC_MODE);
-                    return playerRatingRepository.save(rating);
+                    try {
+                        PlayerRating rating = new PlayerRating();
+                        rating.setUserId(userId);
+                        rating.setSeasonId(seasonId);
+                        rating.setGameMode(mode);
+                        return playerRatingRepository.save(rating);
+                    } catch (DataIntegrityViolationException e) {
+                        // Concurrent create or stale unique key — re-read
+                        return playerRatingRepository.findByUserIdAndSeasonIdAndGameMode(userId, seasonId, mode)
+                                .orElseThrow(() -> e);
+                    }
                 });
     }
 
@@ -67,6 +80,7 @@ public class RatingService {
 
     public UserProfileDto toProfile(User user, PlayerRating rating) {
         boolean placementComplete = TierUtil.isPlacementComplete(rating.getPlacementGames());
+        List<ModeRatingDto> modeRatings = buildModeRatings(user.getId(), rating.getSeasonId());
         return UserProfileDto.builder()
                 .id(user.getId())
                 .email(user.getEmail())
@@ -80,11 +94,14 @@ public class RatingService {
                 .seasonId(rating.getSeasonId())
                 .leaveCount(rating.getLeaveCount())
                 .nextLeavePenaltyMmr(Math.round(leavePenaltyMmr(rating.getLeaveCount()) * 10.0) / 10.0)
+                .modeRatings(modeRatings)
+                .admin(user.isAdmin())
                 .build();
     }
 
     public PublicUserProfileDto toPublicProfile(User user, PlayerRating rating) {
         boolean placementComplete = TierUtil.isPlacementComplete(rating.getPlacementGames());
+        List<ModeRatingDto> modeRatings = buildModeRatings(user.getId(), rating.getSeasonId());
         return PublicUserProfileDto.builder()
                 .id(user.getId())
                 .username(user.getUsername())
@@ -97,6 +114,40 @@ public class RatingService {
                 .seasonId(rating.getSeasonId())
                 .leaveCount(rating.getLeaveCount())
                 .nextLeavePenaltyMmr(Math.round(leavePenaltyMmr(rating.getLeaveCount()) * 10.0) / 10.0)
+                .modeRatings(modeRatings)
+                .build();
+    }
+
+    private List<ModeRatingDto> buildModeRatings(Long userId, int seasonId) {
+        List<ModeRatingDto> out = new ArrayList<>();
+        for (GameMode mode : GameMode.rankedModes()) {
+            PlayerRating pr = getOrCreateRating(userId, mode.name());
+            out.add(toModeRating(pr));
+        }
+        return out;
+    }
+
+    private ModeRatingDto toModeRating(PlayerRating pr) {
+        boolean placed = TierUtil.isPlacementComplete(pr.getPlacementGames());
+        Integer rank = null;
+        if (placed) {
+            long ahead = playerRatingRepository
+                    .countBySeasonIdAndGameModeAndPlacementGamesGreaterThanEqualAndRatingGreaterThan(
+                            pr.getSeasonId(),
+                            pr.getGameMode(),
+                            TierUtil.PLACEMENT_GAMES_REQUIRED,
+                            pr.getRating());
+            rank = (int) ahead + 1;
+        }
+        return ModeRatingDto.builder()
+                .gameMode(pr.getGameMode())
+                .mmr(Math.round(pr.getRating() * 10.0) / 10.0)
+                .tier(TierUtil.tierBadge(pr.getPlacementGames(), pr.getRating()))
+                .placementComplete(placed)
+                .placementGames(pr.getPlacementGames())
+                .placementRequired(TierUtil.PLACEMENT_GAMES_REQUIRED)
+                .gamesPlayed(pr.getGamesPlayed())
+                .rank(rank)
                 .build();
     }
 
@@ -107,18 +158,46 @@ public class RatingService {
         return toPublicProfile(user, rating);
     }
 
-    /** Tier badge for in-game display; null if still in placement. */
+    /** Tier badge for in-game display; null if still in placement. Defaults to Classic. */
     public String tierBadgeForUser(Long userId) {
+        return tierBadgeForUser(userId, CLASSIC_MODE);
+    }
+
+    public String tierBadgeForUser(Long userId, String gameMode) {
         if (userId == null) {
             return null;
         }
-        PlayerRating rating = getOrCreateRating(userId);
+        PlayerRating rating = getOrCreateRating(userId, gameMode);
         return TierUtil.tierBadge(rating.getPlacementGames(), rating.getRating());
+    }
+
+    /**
+     * Persist per-player history for unranked modes (Clan Battle, Poker) without MMR updates.
+     */
+    @Transactional
+    public void recordUnrankedPlayers(GameRecord record, List<Player> players, Map<String, Integer> scores) {
+        for (Player p : players) {
+            if (p.isBot() || p.getUserId() == null) {
+                continue;
+            }
+            GameRecordPlayer grp = new GameRecordPlayer();
+            grp.setGameRecordId(record.getId());
+            grp.setUserId(p.getUserId());
+            grp.setUsername(p.getUsername());
+            grp.setScore(scores.getOrDefault(p.getId(), 0));
+            grp.setRatingBefore(null);
+            grp.setRatingAfter(null);
+            grp.setRatingDelta(null);
+            gameRecordPlayerRepository.save(grp);
+        }
+        log.debug("operation=recordUnrankedPlayers feature=poker-mode status=exit gameRecordId={} players={}",
+                record.getId(), players.size());
     }
 
     @Transactional
     public Map<String, RatingDeltaDto> processRankedGame(GameRecord record, List<Player> humanPlayers,
                                                          Map<String, Integer> scores) {
+        String gameMode = GameMode.normalizeRankedMode(record.getGameMode());
         List<Player> rankedHumans = humanPlayers.stream()
                 .filter(p -> p.getUserId() != null)
                 .sorted((a, b) -> Integer.compare(
@@ -137,7 +216,7 @@ public class RatingService {
 
         for (int i = 0; i < rankedHumans.size(); i++) {
             Player p = rankedHumans.get(i);
-            PlayerRating pr = getOrCreateRating(p.getUserId());
+            PlayerRating pr = getOrCreateRating(p.getUserId(), gameMode);
             before.add(new GlickoRating(pr.getRating(), pr.getRatingDeviation(), pr.getVolatility()));
             ratingEntities.add(pr);
         }
@@ -166,7 +245,7 @@ public class RatingService {
             RatingHistory history = new RatingHistory();
             history.setUserId(p.getUserId());
             history.setSeasonId(pr.getSeasonId());
-            history.setGameMode(CLASSIC_MODE);
+            history.setGameMode(gameMode);
             history.setGameRecordId(record.getId());
             history.setRatingBefore(beforeRating);
             history.setRatingAfter(afterRating);
@@ -198,11 +277,15 @@ public class RatingService {
             seasonService.getActiveSeason().ifPresent(season -> {
                 if (season.isRewardsTracked()) {
                     boolean won = playerRank == 1;
-                    seasonRewardService.recordRankedClassicResult(season.getId(), p.getUserId(), won, afterRating);
+                    seasonRewardService.recordRankedResult(
+                            season.getId(), p.getUserId(), gameMode, won, afterRating,
+                            p.getExactBidRounds());
                 }
             });
         }
 
+        log.debug("operation=processRankedGame feature=multi-mode-mmr status=exit gameRecordId={} gameMode={} players={}",
+                record.getId(), gameMode, rankedHumans.size());
         return deltas;
     }
 
@@ -234,7 +317,8 @@ public class RatingService {
             return Collections.emptyMap();
         }
 
-        PlayerRating pr = getOrCreateRating(forfeiter.getUserId());
+        String gameMode = GameMode.normalizeRankedMode(record.getGameMode());
+        PlayerRating pr = getOrCreateRating(forfeiter.getUserId(), gameMode);
         double beforeRating = pr.getRating();
         int n = pr.getLeaveCount();
         double penalty = leavePenaltyMmr(n);
@@ -248,13 +332,13 @@ public class RatingService {
         pr.setUpdatedAt(Instant.now());
         playerRatingRepository.save(pr);
 
-        log.info("Ranked forfeit penalty userId={} leaveCount={} penalty={} rating {} -> {}",
-                forfeiter.getUserId(), n, penalty, beforeRating, afterRating);
+        log.info("Ranked forfeit penalty userId={} gameMode={} leaveCount={} penalty={} rating {} -> {}",
+                forfeiter.getUserId(), gameMode, n, penalty, beforeRating, afterRating);
 
         RatingHistory history = new RatingHistory();
         history.setUserId(forfeiter.getUserId());
         history.setSeasonId(pr.getSeasonId());
-        history.setGameMode(CLASSIC_MODE);
+        history.setGameMode(gameMode);
         history.setGameRecordId(record.getId());
         history.setRatingBefore(beforeRating);
         history.setRatingAfter(afterRating);
@@ -286,13 +370,18 @@ public class RatingService {
     }
 
     public List<LeaderboardEntryDto> getLeaderboard(int limit) {
-        return getLeaderboardForSeason(seasonService.getRankedSeasonId(), CLASSIC_MODE, limit);
+        return getLeaderboard(CLASSIC_MODE, limit);
+    }
+
+    public List<LeaderboardEntryDto> getLeaderboard(String gameMode, int limit) {
+        return getLeaderboardForSeason(seasonService.getRankedSeasonId(), gameMode, limit);
     }
 
     public List<LeaderboardEntryDto> getLeaderboardForSeason(int seasonId, String gameMode, int limit) {
+        String mode = GameMode.requireRankedMode(gameMode);
         int capped = Math.min(Math.max(limit, 1), 100);
         List<PlayerRating> ratings = playerRatingRepository.findBySeasonIdAndGameModeOrderByRatingDesc(
-                seasonId, gameMode, PageRequest.of(0, capped));
+                seasonId, mode, PageRequest.of(0, capped));
 
         List<LeaderboardEntryDto> entries = new ArrayList<>();
         int rank = 1;
@@ -363,6 +452,7 @@ public class RatingService {
                             .placement(placement)
                             .winnerUsername(gr != null ? gr.getWinnerUsername() : null)
                             .winnerScore(gr != null ? gr.getWinnerScore() : 0)
+                            .gameMode(gr != null ? gr.getGameMode() : null)
                             .opponents(opponents)
                             .build();
                 })

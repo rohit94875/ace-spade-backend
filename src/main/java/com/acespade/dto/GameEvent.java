@@ -32,6 +32,8 @@ public class GameEvent {
         BOT_VOTE_UPDATED,
         SPECTATOR_JOINED,
         PLAYER_KICKED,
+        POKER_UPDATE,
+        POKER_HAND_ENDED,
         ERROR
     }
 

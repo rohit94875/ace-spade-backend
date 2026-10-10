@@ -13,4 +13,6 @@ public interface PlayerRatingRepository extends JpaRepository<PlayerRating, Long
     List<PlayerRating> findBySeasonIdOrderByRatingDesc(int seasonId, Pageable pageable);
     List<PlayerRating> findBySeasonIdAndGameModeOrderByRatingDesc(int seasonId, String gameMode, Pageable pageable);
     long countBySeasonIdAndPlacementGamesGreaterThanEqual(int seasonId, int minPlacement);
+    long countBySeasonIdAndGameModeAndPlacementGamesGreaterThanEqualAndRatingGreaterThan(
+            int seasonId, String gameMode, int minPlacement, double rating);
 }

@@ -9,4 +9,5 @@ import lombok.Data;
 public class SeasonRewardDto {
     private RewardSymbolType symbolType;
     private Double statValue;
+    private String gameMode;
 }

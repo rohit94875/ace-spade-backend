@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -21,4 +23,5 @@ public class PublicUserProfileDto {
     private int seasonId;
     private int leaveCount;
     private double nextLeavePenaltyMmr;
+    private List<ModeRatingDto> modeRatings;
 }

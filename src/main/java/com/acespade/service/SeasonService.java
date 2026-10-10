@@ -176,8 +176,12 @@ public class SeasonService {
                                 .map(u -> u.getUsername())
                                 .orElse("Unknown"))
                         .statValue(r.getStatValue())
+                        .gameMode(r.getGameMode() != null ? r.getGameMode() : CLASSIC_MODE)
                         .build())
-                .sorted(Comparator.comparing(w -> RewardSymbolUtil.awardPrestigeRank(w.getSymbolType())))
+                .sorted(Comparator
+                        .comparing((SeasonRewardWinnerDto w) ->
+                                w.getGameMode() != null ? w.getGameMode() : CLASSIC_MODE)
+                        .thenComparing(w -> RewardSymbolUtil.awardPrestigeRank(w.getSymbolType())))
                 .collect(Collectors.toList());
         return SeasonDetailDto.builder()
                 .seasonId(season.getId())
@@ -221,9 +225,12 @@ public class SeasonService {
                 .map(r -> SeasonRewardDto.builder()
                         .symbolType(r.getSymbolType())
                         .statValue(r.getStatValue())
+                        .gameMode(r.getGameMode() != null ? r.getGameMode() : CLASSIC_MODE)
                         .build())
                 .sorted(Comparator
-                        .comparingInt((SeasonRewardDto r) -> rewardSortGroup(r.getSymbolType()))
+                        .comparing((SeasonRewardDto r) ->
+                                r.getGameMode() != null ? r.getGameMode() : CLASSIC_MODE)
+                        .thenComparingInt(r -> rewardSortGroup(r.getSymbolType()))
                         .thenComparingInt(r -> rewardSortRank(r.getSymbolType())))
                 .collect(Collectors.toList());
     }
