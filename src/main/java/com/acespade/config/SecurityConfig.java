@@ -48,6 +48,7 @@ public class SecurityConfig {
                 .antMatchers(HttpMethod.GET, "/api/rankings/users/*").permitAll()
                 .antMatchers(HttpMethod.GET, "/api/rankings/history/*").permitAll()
                 .antMatchers("/ws/**").permitAll()
+                .antMatchers("/api/admin/**").hasAuthority("ROLE_ADMIN")
                 .anyRequest().authenticated()
                 .and()
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);

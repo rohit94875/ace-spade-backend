@@ -30,6 +30,10 @@ public class Player implements Serializable {
 
     private int tricksWon;
 
+    /** Rounds this match where bid equaled tricks won (season Bid Master stat). */
+    @Builder.Default
+    private int exactBidRounds = 0;
+
     /** True for BOT Vitality (solo or takeover). */
     private boolean bot;
 

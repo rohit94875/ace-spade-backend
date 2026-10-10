@@ -64,7 +64,7 @@ public class GameController {
     }
 
     /**
-     * Player voluntarily leaves the room.
+     * Voluntary leave — spectators only. Seated players cannot forfeit via this endpoint.
      * Client sends to: /app/game/{roomCode}/leave
      */
     @MessageMapping("/game/{roomCode}/leave")

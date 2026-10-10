@@ -28,6 +28,7 @@ public class AuthUserDetailsService implements UserDetailsService {
     }
 
     private AuthUser toAuthUser(User user) {
-        return new AuthUser(user.getId(), user.getEmail(), user.getUsername(), user.getPasswordHash());
+        return new AuthUser(user.getId(), user.getEmail(), user.getUsername(), user.getPasswordHash(),
+                user.isAdmin(), user.isBlocked());
     }
 }

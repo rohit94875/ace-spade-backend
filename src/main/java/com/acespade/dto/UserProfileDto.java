@@ -29,4 +29,5 @@ public class UserProfileDto {
     private double nextLeavePenaltyMmr;
     /** Classic + Ruthless ratings for the current season. */
     private List<ModeRatingDto> modeRatings;
+    private boolean admin;
 }

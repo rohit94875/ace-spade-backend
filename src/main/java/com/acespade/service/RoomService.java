@@ -902,6 +902,12 @@ public class RoomService {
             spectatorLeft(roomCode, playerId);
             return;
         }
+        GameState state = gameStateRepository.findByRoomCode(roomCode).orElse(null);
+        if (state != null && isInProgressPhase(state)) {
+            sendError(playerId, "Only spectators can leave during an active match.");
+            log.debug("Rejected voluntary leave for player {} in room {} (game in progress)", playerId, roomCode);
+            return;
+        }
         handlePlayerDeparture(roomCode, playerId, true);
     }
 

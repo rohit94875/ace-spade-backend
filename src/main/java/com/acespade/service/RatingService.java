@@ -95,6 +95,7 @@ public class RatingService {
                 .leaveCount(rating.getLeaveCount())
                 .nextLeavePenaltyMmr(Math.round(leavePenaltyMmr(rating.getLeaveCount()) * 10.0) / 10.0)
                 .modeRatings(modeRatings)
+                .admin(user.isAdmin())
                 .build();
     }
 
@@ -277,7 +278,8 @@ public class RatingService {
                 if (season.isRewardsTracked()) {
                     boolean won = playerRank == 1;
                     seasonRewardService.recordRankedResult(
-                            season.getId(), p.getUserId(), gameMode, won, afterRating);
+                            season.getId(), p.getUserId(), gameMode, won, afterRating,
+                            p.getExactBidRounds());
                 }
             });
         }

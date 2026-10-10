@@ -37,7 +37,8 @@ public class SeasonRewardService {
     private final GameRecordPlayerRepository gameRecordPlayerRepository;
 
     @Transactional
-    public void recordRankedResult(int seasonId, Long userId, String gameMode, boolean won, double mmrAfter) {
+    public void recordRankedResult(int seasonId, Long userId, String gameMode, boolean won,
+                                   double mmrAfter, int exactBidRoundsThisGame) {
         String mode = GameMode.normalizeRankedMode(gameMode);
         GameMode modeEnum = GameMode.parse(mode);
         SeasonPlayerStats stats = statsRepository
@@ -54,13 +55,15 @@ public class SeasonRewardService {
             stats.setWins(stats.getWins() + 1);
             stats.setWinStreak(stats.getWinStreak() + 1);
             stats.setLossStreak(0);
-            stats.setFinishes(stats.getFinishes() + 1);
             stats.setMaxWinStreak(Math.max(stats.getMaxWinStreak(), stats.getWinStreak()));
         } else {
             stats.setLosses(stats.getLosses() + 1);
             stats.setLossStreak(stats.getLossStreak() + 1);
             stats.setWinStreak(0);
             stats.setMaxLossStreak(Math.max(stats.getMaxLossStreak(), stats.getLossStreak()));
+        }
+        if (exactBidRoundsThisGame > 0) {
+            stats.setExactBids(stats.getExactBids() + exactBidRoundsThisGame);
         }
         stats.setFinalMmr(mmrAfter);
         statsRepository.save(stats);
@@ -71,7 +74,7 @@ public class SeasonRewardService {
     /** @deprecated use {@link #recordRankedResult} */
     @Transactional
     public void recordRankedClassicResult(int seasonId, Long userId, boolean won, double mmrAfter) {
-        recordRankedResult(seasonId, userId, GameMode.CLASSIC.name(), won, mmrAfter);
+        recordRankedResult(seasonId, userId, GameMode.CLASSIC.name(), won, mmrAfter, 0);
     }
 
     @Transactional
@@ -104,7 +107,7 @@ public class SeasonRewardService {
                 }
                 boolean won = grp.getUsername().equals(game.getWinnerUsername());
                 double mmrAfter = grp.getRatingAfter() != null ? grp.getRatingAfter() : 0;
-                recordRankedResult(seasonId, grp.getUserId(), mode.name(), won, mmrAfter);
+                recordRankedResult(seasonId, grp.getUserId(), mode.name(), won, mmrAfter, 0);
             }
         }
         log.info("operation=backfillSeasonStats feature=season-rewards-modes seasonId={} gameMode={} status=exit games={}",
@@ -140,8 +143,8 @@ public class SeasonRewardService {
                 Comparator.comparingInt(SeasonPlayerStats::getMaxWinStreak));
         awardTopIfMissing(seasonId, mode, eligible, RewardSymbolType.LOSS_STREAK,
                 Comparator.comparingInt(SeasonPlayerStats::getMaxLossStreak));
-        awardTopIfMissing(seasonId, mode, eligible, RewardSymbolType.FINISHER,
-                Comparator.comparingInt(SeasonPlayerStats::getFinishes));
+        awardTopIfMissing(seasonId, mode, eligible, RewardSymbolType.BID_MASTER,
+                Comparator.comparingInt(SeasonPlayerStats::getExactBids));
 
         if (!rewardRepository.findBySeasonIdAndGameModeAndSymbolType(
                 seasonId, mode, RewardSymbolType.TOP_MMR).isPresent()) {
@@ -198,7 +201,7 @@ public class SeasonRewardService {
             case MOST_LOSSES: return s.getLosses();
             case WIN_STREAK: return s.getMaxWinStreak();
             case LOSS_STREAK: return s.getMaxLossStreak();
-            case FINISHER: return s.getFinishes();
+            case BID_MASTER: return s.getExactBids();
             default: return 0;
         }
     }

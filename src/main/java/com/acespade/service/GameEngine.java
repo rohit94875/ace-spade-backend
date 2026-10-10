@@ -220,6 +220,9 @@ public class GameEngine {
             for (Player player : state.getPlayers()) {
                 int roundScore = calculateRoundScore(state, player);
                 state.getScores().merge(player.getId(), roundScore, Integer::sum);
+                if (player.getBid() != null && player.getTricksWon() == player.getBid()) {
+                    player.setExactBidRounds(player.getExactBidRounds() + 1);
+                }
             }
         }
 
