@@ -29,7 +29,7 @@ public class RegistrationCodeService {
 
     @Transactional
     public void validateCode(String submitted) {
-        if (submitted == null || submitted.isBlank()) {
+        if (submitted == null || submitted.trim().isEmpty()) {
             throw new IllegalArgumentException("Registration code is required");
         }
         RegistrationSettings settings = getOrCreate();

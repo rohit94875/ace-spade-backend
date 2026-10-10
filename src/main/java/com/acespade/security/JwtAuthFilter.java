@@ -16,6 +16,7 @@ import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
 
 @Component
@@ -38,8 +39,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 if (!user.isEnabled()) {
                     response.setStatus(HttpServletResponse.SC_FORBIDDEN);
                     response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-                    objectMapper.writeValue(response.getOutputStream(),
-                            Map.of("message", AdminService.BLOCKED_MESSAGE));
+                    Map<String, String> body = new HashMap<>();
+                    body.put("message", AdminService.BLOCKED_MESSAGE);
+                    objectMapper.writeValue(response.getOutputStream(), body);
                     return;
                 }
                 UsernamePasswordAuthenticationToken auth =
