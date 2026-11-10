@@ -42,6 +42,7 @@ public class SecurityConfig {
                 .antMatchers(HttpMethod.POST, "/api/rooms/*/join").authenticated()
                 .antMatchers(HttpMethod.POST, "/api/rooms").authenticated()
                 .antMatchers("/api/rankings/leaderboard").permitAll()
+                .antMatchers(HttpMethod.GET, "/api/rankings/all-time").permitAll()
                 .antMatchers(HttpMethod.GET, "/api/seasons/**").permitAll()
                 .antMatchers(HttpMethod.POST, "/api/seasons/run-transitions").permitAll()
                 .antMatchers(HttpMethod.POST, "/api/seasons/*/finalize-rewards").permitAll()
