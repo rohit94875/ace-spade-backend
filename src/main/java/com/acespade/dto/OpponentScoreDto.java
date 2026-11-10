@@ -12,4 +12,8 @@ import lombok.NoArgsConstructor;
 public class OpponentScoreDto {
     private String username;
     private int score;
+    /** Null for bots and unranked games. */
+    private Double ratingBefore;
+    private Double ratingAfter;
+    private Double ratingDelta;
 }
