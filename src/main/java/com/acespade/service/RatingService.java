@@ -426,12 +426,22 @@ public class RatingService {
                                     break;
                                 }
                             }
+                            Map<String, GameRecordPlayer> byName = new java.util.HashMap<>();
+                            for (GameRecordPlayer p : gameRecordPlayerRepository.findByGameRecordId(gr.getId())) {
+                                byName.put(p.getUsername(), p);
+                            }
                             opponents = sorted.stream()
                                     .filter(e -> !e.getKey().equals(grp.getUsername()))
-                                    .map(e -> OpponentScoreDto.builder()
-                                            .username(e.getKey())
-                                            .score(e.getValue())
-                                            .build())
+                                    .map(e -> {
+                                        GameRecordPlayer op = byName.get(e.getKey());
+                                        return OpponentScoreDto.builder()
+                                                .username(e.getKey())
+                                                .score(e.getValue())
+                                                .ratingBefore(op != null ? op.getRatingBefore() : null)
+                                                .ratingAfter(op != null ? op.getRatingAfter() : null)
+                                                .ratingDelta(op != null ? op.getRatingDelta() : null)
+                                                .build();
+                                    })
                                     .collect(Collectors.toList());
                         } catch (Exception e) {
                             log.warn("Failed to parse scores for game {}", gr.getId(), e);
