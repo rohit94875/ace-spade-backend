@@ -11,4 +11,8 @@ public class ChatRequest {
     private String text;
 
     private List<String> mentions;
+
+    /** Optional id of the chat message being replied to. */
+    @Size(max = 64)
+    private String replyToId;
 }
