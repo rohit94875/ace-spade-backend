@@ -17,5 +17,6 @@ public class ChatMessageDto {
     private String username;
     private String text;
     private List<String> mentions;
+    private ChatReplyDto replyTo;
     private long sentAt;
 }

@@ -20,6 +20,8 @@ public class ChatMessage implements Serializable {
     private String username;
     private String text;
     private List<String> mentions;
+    /** Quote of the message this one replies to, or null. */
+    private ChatReply replyTo;
     /** Epoch millis. */
     private long sentAt;
 }

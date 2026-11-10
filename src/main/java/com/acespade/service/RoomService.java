@@ -642,6 +642,7 @@ public class RoomService {
             }
 
             List<String> mentions = validateMentions(request.getMentions(), state);
+            ChatReply replyTo = buildReply(request.getReplyToId(), state);
 
             ChatMessage msg = ChatMessage.builder()
                     .id(UUID.randomUUID().toString())
@@ -649,6 +650,7 @@ public class RoomService {
                     .username(username)
                     .text(text)
                     .mentions(mentions.isEmpty() ? null : mentions)
+                    .replyTo(replyTo)
                     .sentAt(System.currentTimeMillis())
                     .build();
             if (state.getChatMessages() == null) {
@@ -2143,14 +2145,46 @@ public class RoomService {
     }
 
     private ChatMessageDto toChatDto(ChatMessage msg) {
+        ChatReply reply = msg.getReplyTo();
         return ChatMessageDto.builder()
                 .id(msg.getId())
                 .playerId(msg.getPlayerId())
                 .username(msg.getUsername())
                 .text(msg.getText())
                 .mentions(msg.getMentions())
+                .replyTo(reply == null ? null : ChatReplyDto.builder()
+                        .id(reply.getId())
+                        .username(reply.getUsername())
+                        .text(reply.getText())
+                        .build())
                 .sentAt(msg.getSentAt())
                 .build();
+    }
+
+    private static final int REPLY_QUOTE_MAX_CHARS = 80;
+
+    /**
+     * Builds the quote for a reply from the stored original. Returns null when no reply was
+     * requested or the original is no longer in the room, so the message is sent as a normal one.
+     */
+    private ChatReply buildReply(String replyToId, GameState state) {
+        if (replyToId == null || replyToId.isEmpty() || state.getChatMessages() == null) {
+            return null;
+        }
+        for (ChatMessage original : state.getChatMessages()) {
+            if (replyToId.equals(original.getId())) {
+                String quoted = original.getText() == null ? "" : original.getText();
+                if (quoted.length() > REPLY_QUOTE_MAX_CHARS) {
+                    quoted = quoted.substring(0, REPLY_QUOTE_MAX_CHARS) + "\u2026";
+                }
+                return ChatReply.builder()
+                        .id(original.getId())
+                        .username(original.getUsername())
+                        .text(quoted)
+                        .build();
+            }
+        }
+        return null;
     }
 
     private static void sleep(long ms) {
