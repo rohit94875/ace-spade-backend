@@ -31,6 +31,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final RatingService ratingService;
+    private final RegistrationCodeService registrationCodeService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Value("${ace.jwt.refresh-expiration-ms:604800000}")
@@ -50,12 +51,14 @@ public class AuthService {
         if (userRepository.existsByUsernameIgnoreCase(username)) {
             throw new IllegalArgumentException("Username already taken");
         }
+        registrationCodeService.validateCode(request.getAdminCode());
 
         User user = new User();
         user.setEmail(email);
         user.setUsername(username);
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         user = userRepository.save(user);
+        registrationCodeService.rotateAfterRegistration();
 
         ratingService.getOrCreateRating(user.getId());
         return buildAuthResponse(user);
@@ -67,6 +70,7 @@ public class AuthService {
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
             throw new IllegalArgumentException("Invalid email or password");
         }
+        ensureNotBlocked(user);
         return buildAuthResponse(user);
     }
 
@@ -81,6 +85,7 @@ public class AuthService {
         }
         User user = userRepository.findById(stored.getUserId())
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
+        ensureNotBlocked(user);
         refreshTokenRepository.delete(stored);
         return buildAuthResponse(user);
     }
@@ -98,6 +103,12 @@ public class AuthService {
 
     public boolean userExists(Long userId) {
         return userId != null && userRepository.existsById(userId);
+    }
+
+    private void ensureNotBlocked(User user) {
+        if (user.isBlocked()) {
+            throw new IllegalArgumentException(AdminService.BLOCKED_MESSAGE);
+        }
     }
 
     private AuthResponse buildAuthResponse(User user) {

@@ -25,7 +25,7 @@ public class PlayerDto {
     private int autoPlayCount;
     private boolean ready;
 
-    /** True when bid is placed but amount is hidden (Ruthless mode). */
+    /** True when a bid amount is set. */
     private boolean bidPlaced;
 
     /** Clan Battle team: 1 or 2. */
@@ -33,4 +33,11 @@ public class PlayerDto {
 
     /** Ranked tier badge after placement; null while placing or for bots/guests. */
     private String tier;
+
+    /** Poker chip stack (also mirrored in scores during poker). */
+    private Integer chips;
+
+    private Integer betThisStreet;
+    private boolean folded;
+    private boolean allIn;
 }

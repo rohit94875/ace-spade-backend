@@ -6,5 +6,7 @@ public enum GamePhase {
     PLAYING,
     TRICK_RESOLVE,
     ROUND_END,
-    GAME_END
+    GAME_END,
+    /** Active poker hand (betting / dealing streets). */
+    POKER_HAND
 }

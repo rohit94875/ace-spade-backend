@@ -29,6 +29,6 @@ public class CreateRoomRequest {
     /** Ranked only: 8–13 rounds. Casual rooms always use 5 rounds. */
     private int maxRounds = 13;
 
-    /** CLASSIC, RUTHLESS_HIDDEN, or CLAN_BATTLE */
+    /** CLASSIC, RUTHLESS_HIDDEN, CLAN_BATTLE, or POKER */
     private String gameMode = "CLASSIC";
 }

@@ -38,4 +38,7 @@ public class RoomStateDto {
     private Map<String, Integer> teamScores;
     private String team1Name;
     private String team2Name;
+
+    /** Poker public table snapshot (null for non-poker modes). */
+    private Map<String, Object> poker;
 }

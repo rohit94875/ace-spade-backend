@@ -64,7 +64,7 @@ public class GameController {
     }
 
     /**
-     * Player voluntarily leaves the room.
+     * Voluntary leave — spectators only. Seated players cannot forfeit via this endpoint.
      * Client sends to: /app/game/{roomCode}/leave
      */
     @MessageMapping("/game/{roomCode}/leave")
@@ -120,6 +120,16 @@ public class GameController {
         log.debug("KICK received for room {} by {} target {}",
                 roomCode, principal.getName(), request.getTargetPlayerId());
         roomService.kickPlayer(roomCode, principal.getName(), request.getTargetPlayerId());
+    }
+
+    @MessageMapping("/game/{roomCode}/poker")
+    public void pokerAction(@DestinationVariable String roomCode,
+                            @Payload PokerActionRequest request,
+                            Principal principal) {
+        if (principal == null || request == null || request.getAction() == null) return;
+        log.debug("POKER {} received for room {} by {}",
+                request.getAction(), roomCode, principal.getName());
+        roomService.placePokerAction(roomCode, principal.getName(), request.getAction());
     }
 
     @MessageMapping("/game/{roomCode}/team")

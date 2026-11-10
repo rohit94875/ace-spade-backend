@@ -22,7 +22,6 @@ public final class RewardSymbolUtil {
             RewardSymbolType.TOP_MMR,
             RewardSymbolType.MOST_WINS,
             RewardSymbolType.WIN_STREAK,
-            RewardSymbolType.FINISHER,
             RewardSymbolType.MOST_MATCHES,
             RewardSymbolType.MOST_LOSSES,
             RewardSymbolType.LOSS_STREAK,
@@ -40,7 +39,7 @@ public final class RewardSymbolUtil {
     }
 
     public static boolean isAwardBadge(RewardSymbolType type) {
-        return AWARD_BADGES.contains(type);
+        return AWARD_BADGES.contains(type) || type == RewardSymbolType.FINISHER;
     }
 
     public static int awardPrestigeRank(RewardSymbolType type) {
@@ -48,11 +47,11 @@ public final class RewardSymbolUtil {
             case TOP_MMR: return 0;
             case MOST_WINS: return 1;
             case WIN_STREAK: return 2;
-            case FINISHER: return 3;
+            case BID_MASTER: return 3;
             case MOST_MATCHES: return 4;
             case MOST_LOSSES: return 5;
             case LOSS_STREAK: return 6;
-            case BID_MASTER: return 7;
+            case FINISHER: return 7; // legacy season rows only
             default: return 99;
         }
     }

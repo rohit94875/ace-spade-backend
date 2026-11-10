@@ -36,6 +36,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, String>> handleDuplicate(DataIntegrityViolationException e) {
+        String detail = e.getMostSpecificCause() != null
+                ? e.getMostSpecificCause().getMessage()
+                : e.getMessage();
+        if (detail != null && detail.toLowerCase().contains("player_ratings")) {
+            return ResponseEntity.badRequest().body(errorBody(
+                    "Rating table needs a schema update — restart the server once (auto-migrates), or run docs/migrate-player-ratings-game-mode.sql"));
+        }
         return ResponseEntity.badRequest().body(errorBody("Email or username already taken"));
     }
 
